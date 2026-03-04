@@ -1,122 +1,165 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "Pterodactyl Wings",
+  "theme": "aspen",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#9a5c2b",
+    "light": "#b8aca4",
+    "dark": "#f4f1ea"
   },
-  "favicon": "/favicon.svg",
+  "favicon": "https://media.brand.dev/c6c7bc0a-ff00-4000-8a4e-0d7a6bc9543a.jpg",
+  "logo": {
+    "light": "https://media.brand.dev/c787b4a1-341c-40d2-b139-8867c80c4c9f.png",
+    "dark": "https://media.brand.dev/c787b4a1-341c-40d2-b139-8867c80c4c9f.png"
+  },
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/pterodactyl/wings"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/pterodactyl/wings"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Overview",
             "pages": [
-              "index",
-              "quickstart",
-              "development"
+              "introduction",
+              "quickstart"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Installation",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "installation/requirements",
+              "installation/installing",
+              "installation/configuration",
+              "installation/panel-configuration"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Core Concepts",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "concepts/architecture",
+              "concepts/server-lifecycle",
+              "concepts/docker-integration",
+              "concepts/file-management"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Configuration",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "configuration/config-file",
+              "configuration/system-settings",
+              "configuration/docker-settings",
+              "configuration/sftp-settings",
+              "configuration/ssl-tls"
+            ]
+          },
+          {
+            "group": "Operations",
+            "pages": [
+              "operations/server-management",
+              "operations/backups",
+              "operations/transfers",
+              "operations/diagnostics",
+              "operations/monitoring"
+            ]
+          },
+          {
+            "group": "Security",
+            "pages": [
+              "security/authentication",
+              "security/ssl-certificates",
+              "security/permissions",
+              "security/best-practices"
+            ]
+          },
+          {
+            "group": "Troubleshooting",
+            "pages": [
+              "troubleshooting/common-issues",
+              "troubleshooting/debugging",
+              "troubleshooting/performance"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "API Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Getting Started",
             "pages": [
-              "api-reference/introduction"
+              "api/overview",
+              "api/authentication"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "System",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "api/system/information",
+              "api/system/configuration"
+            ]
+          },
+          {
+            "group": "Servers",
+            "pages": [
+              "api/servers/list",
+              "api/servers/create",
+              "api/servers/details",
+              "api/servers/delete",
+              "api/servers/power",
+              "api/servers/commands",
+              "api/servers/install",
+              "api/servers/sync",
+              "api/servers/logs",
+              "api/servers/websocket"
+            ]
+          },
+          {
+            "group": "File Management",
+            "pages": [
+              "api/files/list-directory",
+              "api/files/read",
+              "api/files/write",
+              "api/files/upload",
+              "api/files/download",
+              "api/files/rename",
+              "api/files/copy",
+              "api/files/delete",
+              "api/files/compress",
+              "api/files/decompress",
+              "api/files/chmod",
+              "api/files/pull-remote"
+            ]
+          },
+          {
+            "group": "Backups",
+            "pages": [
+              "api/backups/create",
+              "api/backups/restore",
+              "api/backups/delete",
+              "api/backups/download"
+            ]
+          },
+          {
+            "group": "Transfers",
+            "pages": [
+              "api/transfers/initiate",
+              "api/transfers/status",
+              "api/transfers/cancel"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

@@ -1,0 +1,514 @@
+---
+title: Debugging Wings
+description: Tools and techniques for debugging Pterodactyl Wings
+---
+
+This guide covers debugging tools and techniques for troubleshooting Pterodactyl Wings issues.
+
+## Debug Mode
+
+### Enabling Debug Mode
+
+Wings supports debug mode which increases log verbosity to help diagnose issues.
+
+**Via command-line flag:**
+```bash
+wings --debug
+```
+
+**Via configuration file:**
+
+Edit `/etc/pterodactyl/config.yml`:
+```yaml
+debug: true
+```
+
+**Via systemd service:**
+
+Edit `/etc/systemd/system/wings.service`:
+```ini
+[Service]
+ExecStart=/usr/local/bin/wings --debug
+```
+
+Then reload and restart:
+```bash
+systemctl daemon-reload
+systemctl restart wings
+```
+
+<Note>
+The `--debug` flag takes precedence over the configuration file setting. When enabled via flag, Wings will not save the debug state to disk to prevent always running in debug mode after restart.
+</Note>
+
+### Debug Mode Output
+
+When debug mode is enabled, Wings will:
+- Log at DEBUG level instead of INFO level (configured in `cmd/root.go:428-431`)
+- Print "running in debug mode" on startup (`cmd/root.go:95`)
+- Include detailed information about:
+  - Configuration loading
+  - Directory creation
+  - Server bootstrapping
+  - Docker operations
+  - Resource polling
+  - State changes
+
+**Example debug output:**
+```
+DEBUG running in debug mode
+INFO  loading configuration from file config_file=/etc/pterodactyl/config.yml
+DEBUG ensuring root data directory exists path=/var/lib/pterodactyl
+DEBUG ensuring server data directory exists path=/var/lib/pterodactyl/volumes
+DEBUG re-syncing server configuration for already running server
+```
+
+## Log Files
+
+### Log Locations
+
+Wings writes logs to multiple locations depending on configuration.
+
+**Primary Wings log:**
+```bash
+/var/log/pterodactyl/wings.log
+```
+
+**Installation logs** (per-server):
+```bash
+/var/log/pterodactyl/install/<server-uuid>.log
+```
+
+**Custom log directory:**
+
+Configure in `config.yml`:
+```yaml
+system:
+  log_directory: /var/log/pterodactyl
+```
+
+### Viewing Logs
+
+**Tail the main Wings log:**
+```bash
+tail -f /var/log/pterodactyl/wings.log
+```
+
+**View with systemd journal:**
+```bash
+# Follow logs in real-time
+journalctl -u wings -f
+
+# Show last 100 lines
+journalctl -u wings -n 100 --no-pager
+
+# Show logs since boot
+journalctl -u wings -b
+
+# Show logs from specific date
+journalctl -u wings --since "2026-03-01"
+
+# Show logs with specific priority
+journalctl -u wings -p err
+```
+
+**Filter logs by keyword:**
+```bash
+grep -i "error" /var/log/pterodactyl/wings.log
+grep -i "docker" /var/log/pterodactyl/wings.log
+grep -i "server" /var/log/pterodactyl/wings.log | grep <server-uuid>
+```
+
+### Log Rotation
+
+Wings automatically configures log rotation if `/etc/logrotate.d` exists (see `config/config.go:695-737`).
+
+**Default rotation settings:**
+- Rotate when log reaches 10M
+- Keep logs for 7 days
+- Compress old logs
+- Use HUP signal to reload Wings
+
+**Manual rotation:**
+```bash
+logrotate -f /etc/logrotate.d/wings
+```
+
+**Check rotation status:**
+```bash
+cat /var/lib/logrotate/status | grep wings
+```
+
+**Disable automatic log rotation** in `config.yml`:
+```yaml
+system:
+  enable_log_rotate: false
+```
+
+## Diagnostics Command
+
+Wings includes a built-in diagnostics command that collects system information for troubleshooting.
+
+### Running Diagnostics
+
+```bash
+wings diagnostics
+```
+
+The diagnostics command will:
+1. Ask if you want to include endpoints (FQDNs/IPs)
+2. Ask if you want to include logs
+3. Ask if you want to review before uploading
+4. Collect system information
+5. Optionally upload to a hastebin service
+
+### Diagnostics Output
+
+The diagnostics report includes:
+
+**Version Information:**
+- Wings version
+- Docker version
+- Kernel version
+- Operating system
+
+**Wings Configuration:**
+- Panel location (redacted by default)
+- Webserver settings (host, port, SSL)
+- SFTP server settings
+- Directory paths
+- System user
+- Timezone
+- Debug mode status
+
+**Docker Information:**
+- Server version
+- Storage driver and status
+- Logging driver
+- Cgroup driver
+- System warnings
+
+**Running Containers:**
+- List of all Docker containers
+
+**Logs:**
+- Last 200 lines of Wings logs (configurable)
+
+### Diagnostics Options
+
+**Custom hastebin URL:**
+```bash
+wings diagnostics --hastebin-url https://paste.example.com
+```
+
+**Custom log line count:**
+```bash
+wings diagnostics --log-lines 500
+```
+
+**Example output:**
+```
+Pterodactyl Wings - Diagnostics Report
+|
+| Versions
+| ------------------------------
+               Wings: v1.11.0
+              Docker: 24.0.7
+              Kernel: 5.15.0-89-generic
+                  OS: Ubuntu 22.04.3 LTS
+
+| Wings Configuration
+| ------------------------------
+      Panel Location: {redacted}
+  Internal Webserver: 0.0.0.0 : 8080
+         SSL Enabled: true
+```
+
+## Performance Profiling
+
+Wings includes built-in support for Go's pprof profiler to diagnose performance issues.
+
+### Enabling pprof
+
+**Start Wings with profiling:**
+```bash
+wings --pprof
+```
+
+**Custom pprof port:**
+```bash
+wings --pprof --pprof-port 6060
+```
+
+**Enable block profiling:**
+```bash
+wings --pprof --pprof-block-rate 1
+```
+
+By default, pprof binds to `localhost:6060` (configured in `cmd/root.go:81-83`).
+
+### Accessing pprof
+
+Once enabled, pprof provides several endpoints:
+
+**CPU Profile:**
+```bash
+go tool pprof http://localhost:6060/debug/pprof/profile?seconds=30
+```
+
+**Heap Memory:**
+```bash
+go tool pprof http://localhost:6060/debug/pprof/heap
+```
+
+**Goroutines:**
+```bash
+go tool pprof http://localhost:6060/debug/pprof/goroutine
+```
+
+**Block Profile:**
+```bash
+go tool pprof http://localhost:6060/debug/pprof/block
+```
+
+**Mutex Profile:**
+```bash
+go tool pprof http://localhost:6060/debug/pprof/mutex
+```
+
+**All available profiles:**
+```bash
+curl http://localhost:6060/debug/pprof/
+```
+
+### Analyzing Profiles
+
+**Interactive mode:**
+```bash
+go tool pprof http://localhost:6060/debug/pprof/heap
+(pprof) top10
+(pprof) list functionName
+(pprof) web
+```
+
+**Generate CPU profile:**
+```bash
+# Collect 30 seconds of CPU profiling
+curl http://localhost:6060/debug/pprof/profile?seconds=30 > cpu.prof
+
+# Analyze
+go tool pprof cpu.prof
+```
+
+**Generate SVG graph:**
+```bash
+go tool pprof -svg http://localhost:6060/debug/pprof/heap > heap.svg
+```
+
+<Warning>
+Only enable pprof when actively debugging performance issues, as it adds overhead. The profiler only binds to localhost by default for security.
+</Warning>
+
+## Diagnostic Commands
+
+### Check Wings Status
+
+```bash
+# Systemd status
+systemctl status wings
+
+# Process information
+ps aux | grep wings
+
+# Network listeners
+netstat -tlnp | grep wings
+ss -tlnp | grep wings
+```
+
+### Check Docker Status
+
+```bash
+# Docker daemon status
+systemctl status docker
+
+# Docker information
+docker info
+docker version
+
+# Pterodactyl network
+docker network inspect pterodactyl_nw
+
+# Container list
+docker ps -a
+
+# Container logs
+docker logs <container-id>
+
+# Container resource usage
+docker stats
+```
+
+### Check Server States
+
+```bash
+# View saved server states
+cat /var/lib/pterodactyl/states.json | jq
+
+# Check server container
+docker inspect <server-uuid>
+
+# Check server files
+ls -la /var/lib/pterodactyl/volumes/<server-uuid>/
+```
+
+### Check Disk Usage
+
+```bash
+# Overall disk usage
+df -h
+
+# Docker disk usage
+docker system df
+docker system df -v
+
+# Server directory sizes
+du -sh /var/lib/pterodactyl/volumes/*
+
+# Check inode usage
+df -i
+```
+
+### Network Diagnostics
+
+```bash
+# Check Wings API
+curl -k https://localhost:8080/api/system
+
+# Check SFTP port
+telnet localhost 2022
+
+# Check Panel connectivity
+curl -I https://panel.example.com
+
+# Check firewall
+ufw status verbose
+iptables -L -n -v
+```
+
+## Common Log Messages
+
+### Startup Messages
+
+**Successful startup:**
+```
+INFO  loading configuration from file
+INFO  configured wings with system timezone
+INFO  configured system user successfully
+INFO  finished loading configuration for server
+INFO  sftp server listening for connections
+INFO  configuring internal webserver
+```
+
+**Docker configuration:**
+```
+INFO  creating missing pterodactyl0 interface, this could take a few seconds...
+DEBUG ensuring root data directory exists
+DEBUG ensuring server data directory exists
+```
+
+### Error Messages
+
+**Configuration errors:**
+```
+FATAL failed to detect system timezone or use supplied configuration value
+FATAL failed to configure system directories for pterodactyl
+FATAL failed to create pterodactyl system user
+FATAL failed to configure docker environment
+```
+
+**Server errors:**
+```
+ERROR could create base environment for server...
+ERROR error checking server environment status
+WARN  failed to return server to running state
+WARN  failed to attach to running server environment
+```
+
+**Docker errors:**
+```
+WARN  error while processing Docker stats output for container
+DEBUG io.EOF encountered during stats decode, stopping polling...
+DEBUG process in offline state while resource polling is still active
+```
+
+### Crash Detection Messages
+
+```
+---------- Detected server process in a crashed state! ----------
+Exit code: 1
+Out of memory: false
+Aborting automatic restart, last crash occurred less than 60 seconds ago.
+```
+
+## Debugging Server Issues
+
+### Server Won't Start
+
+1. **Check server logs:**
+   ```bash
+   docker logs <server-uuid>
+   ```
+
+2. **Check Wings logs:**
+   ```bash
+   journalctl -u wings -n 100 | grep <server-uuid>
+   ```
+
+3. **Inspect container:**
+   ```bash
+   docker inspect <server-uuid>
+   ```
+
+4. **Check for resource limits:**
+   Look for memory/CPU constraints in the server configuration.
+
+5. **Verify image exists:**
+   ```bash
+   docker images | grep <image-name>
+   ```
+
+### Server Crashes Repeatedly
+
+Wings has built-in crash detection with a configurable timeout (default: 60 seconds in `config/config.go:270`).
+
+**Check crash configuration:**
+```yaml
+system:
+  crash_detection:
+    enabled: true
+    detect_clean_exit_as_crash: true
+    timeout: 60
+```
+
+**View crash messages:**
+```bash
+journalctl -u wings | grep "crashed state"
+```
+
+### Resource Usage Issues
+
+Wings polls Docker stats continuously when a server is running (see `environment/docker/stats.go`).
+
+**Monitor in real-time:**
+```bash
+docker stats <server-uuid>
+```
+
+**Check memory calculation:**
+Wings calculates memory differently than `docker stats` to match the Panel display. See `environment/docker/stats.go:98-120` for details.
+
+## See Also
+
+- [Common Issues](/troubleshooting/common-issues) - Frequently encountered problems
+- [Performance Tuning](/troubleshooting/performance) - Optimize Wings performance
+- [Wings Configuration](/configuration/config-file) - Complete configuration reference

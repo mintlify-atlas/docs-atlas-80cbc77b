@@ -1,0 +1,199 @@
+---
+title: 'Receive Server Transfer'
+description: 'Accept and process an incoming server transfer'
+---
+
+## POST /api/transfers
+
+Receives an incoming server transfer from another node. This endpoint accepts a multipart form upload containing the server archive and checksum.
+
+<Info>
+  This endpoint uses JWT authentication instead of the standard API token. The JWT is issued by the Panel and passed from the source node.
+</Info>
+
+### Authentication
+
+This endpoint requires a JWT bearer token in the Authorization header:
+
+```
+Authorization: Bearer JWT_TOKEN
+```
+
+The JWT payload must contain:
+- **Subject**: The server UUID being transferred
+
+### Request Body
+
+The request must be sent as `multipart/form-data` with two parts:
+
+<ParamField body="archive" type="file" required>
+  A tar.gz compressed archive containing all server files. This part must be sent **before** the checksum.
+</ParamField>
+
+<ParamField body="checksum" type="string" required>
+  SHA-256 checksum of the archive in hexadecimal format. Used to verify data integrity after transfer.
+</ParamField>
+
+### Response
+
+Returns `200 OK` when the transfer is successfully received and processed.
+
+### Error Responses
+
+<ResponseField name="401 Unauthorized" type="error">
+  Invalid or missing JWT token
+  
+  ```json
+  {
+    "error": "The required authorization heads were not present in the request."
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="400 Bad Request" type="error">
+  Invalid request format or checksum mismatch
+  
+  Examples:
+  - `"invalid content type"`
+  - `"archive must be sent before the checksum"`
+  - `"missing archive or checksum"`
+  - `"checksums don't match"`
+</ResponseField>
+
+<ResponseField name="500 Internal Server Error" type="error">
+  Failed to extract archive or configure server environment
+</ResponseField>
+
+### Transfer Reception Process
+
+When receiving a transfer, Wings performs the following steps:
+
+<Steps>
+  <Step title="Authentication">
+    Validates the JWT token and extracts the server UUID
+  </Step>
+  
+  <Step title="Server Initialization">
+    Creates or retrieves the transfer instance and initializes the server
+  </Step>
+  
+  <Step title="Archive Extraction">
+    Streams the archive directly to disk while calculating the SHA-256 checksum
+  </Step>
+  
+  <Step title="Checksum Verification">
+    Compares the calculated checksum with the provided checksum to ensure data integrity
+  </Step>
+  
+  <Step title="Environment Configuration">
+    Configures the server's Docker environment
+  </Step>
+  
+  <Step title="Panel Notification">
+    Notifies the Panel of success or failure
+  </Step>
+</Steps>
+
+<Warning>
+  If any step fails, the transfer is aborted and all extracted files are deleted. The Panel is notified of the failure.
+</Warning>
+
+### Transfer States
+
+The transfer goes through several states:
+
+- **pending**: Transfer instance created, waiting for archive
+- **processing**: Receiving and extracting archive data
+- **success**: Transfer completed successfully
+- **failure**: Transfer failed (files are cleaned up)
+
+### Example Request
+
+```bash cURL
+curl -X POST https://destination.example.com/api/transfers \
+  -H "Authorization: Bearer JWT_TOKEN" \
+  -F "archive=@/path/to/server-archive.tar.gz" \
+  -F "checksum=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+```
+
+```javascript JavaScript
+const formData = new FormData();
+formData.append('archive', archiveFile);
+formData.append('checksum', 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
+
+const response = await fetch('https://destination.example.com/api/transfers', {
+  method: 'POST',
+  headers: {
+    'Authorization': 'Bearer JWT_TOKEN'
+  },
+  body: formData
+});
+```
+
+```python Python
+import requests
+
+files = {
+    'archive': ('archive.tar.gz', open('/path/to/server-archive.tar.gz', 'rb'), 'application/gzip'),
+}
+data = {
+    'checksum': 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+}
+
+response = requests.post(
+    'https://destination.example.com/api/transfers',
+    headers={'Authorization': 'Bearer JWT_TOKEN'},
+    files=files,
+    data=data
+)
+```
+
+### Example Response
+
+```http
+HTTP/1.1 200 OK
+```
+
+### Implementation Details
+
+#### Checksum Calculation
+
+The checksum is calculated using SHA-256 as the archive is being uploaded:
+
+```go
+h := sha256.New()
+tee := io.TeeReader(archiveReader, h)
+// Extract while hashing
+checksum := hex.EncodeToString(h.Sum(nil))
+```
+
+#### Data Streaming
+
+The archive is streamed directly to the filesystem without storing the entire file in memory. This allows transferring large servers efficiently:
+
+```go
+trnsfr.Server.Filesystem().ExtractStreamUnsafe(ctx, "/", archiveStream)
+```
+
+<Note>
+  This endpoint is typically called by another Wings instance, not directly by users or the Panel. The Panel orchestrates transfers by providing the necessary JWT tokens to both nodes.
+</Note>
+
+### Server Events
+
+During the transfer, the server publishes events that can be monitored via WebSocket:
+
+- **transfer.status**: Status changes (success/failure)
+- **transfer.logs**: Progress messages from the source node
+
+### Related Endpoints
+
+<CardGroup cols={2}>
+  <Card title="Initiate Transfer" icon="upload" href="/api/transfers/initiate">
+    Start an outgoing server transfer
+  </Card>
+  
+  <Card title="Cancel Transfer" icon="xmark" href="/api/transfers/cancel">
+    Cancel an incoming server transfer
+  </Card>
+</CardGroup>

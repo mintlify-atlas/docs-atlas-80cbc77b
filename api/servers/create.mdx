@@ -1,0 +1,82 @@
+---
+title: Create Server
+api: POST /api/servers
+---
+
+Creates a new server on the Wings instance and begins the installation process.
+
+## Authentication
+
+Requires the Wings authentication token in the `Authorization` header:
+
+```
+Authorization: Bearer <token>
+```
+
+## Request Body
+
+<ParamField body="uuid" type="string" required>
+  The UUID of the server to create. Must be a valid UUIDv4 format.
+</ParamField>
+
+<ParamField body="start_on_completion" type="boolean" default={false}>
+  Whether to automatically start the server after installation completes.
+</ParamField>
+
+## Response
+
+Returns `202 Accepted` to indicate the server creation and installation process has started in the background.
+
+## Error Responses
+
+<ResponseField name="422 Unprocessable Entity">
+  The data provided could not be validated (e.g., invalid UUID format).
+</ResponseField>
+
+<ResponseField name="500 Internal Server Error">
+  An error occurred while creating the server instance.
+</ResponseField>
+
+## Behavior
+
+This endpoint:
+1. Validates the provided UUID format
+2. Fetches server configuration from the Panel
+3. Initializes the server instance in Wings
+4. Adds the server to the manager
+5. Begins installation in background:
+   - Creates the server environment (Docker container)
+   - Runs the installation process
+   - Optionally starts the server if `start_on_completion` is true
+
+Installation runs asynchronously, so errors during installation will be logged but not returned in the API response.
+
+## Example Request
+
+```bash
+curl -X POST https://wings.example.com/api/servers \
+  -H "Authorization: Bearer your-wings-token" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json" \
+  -d '{
+    "uuid": "8d3f9a2e-5c7b-4f1e-9d2a-6e8f1c3b5a7d",
+    "start_on_completion": true
+  }'
+```
+
+## Example Response
+
+```
+HTTP/1.1 202 Accepted
+```
+
+## Notes
+
+- The server configuration is fetched from the Panel using the provided UUID
+- Installation happens asynchronously in the background
+- Monitor server logs or websocket events to track installation progress
+- If installation fails, the server will remain in an installing state until manually triggered again
+
+## Source Reference
+
+Implemented in `router/router_system.go:61`

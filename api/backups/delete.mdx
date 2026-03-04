@@ -1,0 +1,160 @@
+---
+title: "Delete Backup"
+description: "Delete a local backup from the Wings node"
+---
+
+## Endpoint
+
+```
+DELETE /api/servers/:server/backup/:backup
+```
+
+## Authentication
+
+Requires Bearer token authentication via the `Authorization` header.
+
+## Path Parameters
+
+<ParamField path="server" type="string" required>
+  The UUID of the server
+</ParamField>
+
+<ParamField path="backup" type="string" required>
+  The UUID of the backup to delete
+</ParamField>
+
+## Response
+
+Returns `204 No Content` on success.
+
+## Example Request
+
+<CodeGroup>
+```bash cURL
+curl -X DELETE "https://wings.example.com/api/servers/d3aac109-f0fc-4674-b5bc-199bb50e6b88/backup/550e8400-e29b-41d4-a716-446655440000" \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+```javascript JavaScript
+await fetch(
+  'https://wings.example.com/api/servers/d3aac109-f0fc-4674-b5bc-199bb50e6b88/backup/550e8400-e29b-41d4-a716-446655440000',
+  {
+    method: 'DELETE',
+    headers: {
+      'Authorization': 'Bearer YOUR_TOKEN'
+    }
+  }
+);
+```
+
+```python Python
+import requests
+
+requests.delete(
+    'https://wings.example.com/api/servers/d3aac109-f0fc-4674-b5bc-199bb50e6b88/backup/550e8400-e29b-41d4-a716-446655440000',
+    headers={'Authorization': 'Bearer YOUR_TOKEN'}
+)
+```
+
+```go Go
+req, _ := http.NewRequest(
+    "DELETE",
+    "https://wings.example.com/api/servers/d3aac109-f0fc-4674-b5bc-199bb50e6b88/backup/550e8400-e29b-41d4-a716-446655440000",
+    nil,
+)
+req.Header.Set("Authorization", "Bearer YOUR_TOKEN")
+
+client := &http.Client{}
+resp, err := client.Do(req)
+```
+</CodeGroup>
+
+## Behavior
+
+- Only **local backups** stored on the Wings node can be deleted
+- S3 backups must be deleted through the Panel or directly from S3
+- Backup file is permanently deleted from disk
+- If the backup doesn't exist, returns `204 No Content` (idempotent)
+- Backup metadata should be removed from the Panel separately
+
+<Info>
+  This endpoint only deletes the backup file from the Wings node. The backup record in the Panel database is not automatically removed.
+</Info>
+
+## Local Backup Location
+
+Local backups are stored in the configured backup directory:
+
+```yaml
+# config.yml
+system:
+  backup_directory: /var/lib/pterodactyl/backups
+```
+
+Backup filename format: `backup-{uuid}.tar.gz`
+
+## Error Responses
+
+<AccordionGroup>
+  <Accordion title="401 Unauthorized">
+    Missing or invalid Bearer token
+  </Accordion>
+  <Accordion title="404 Not Found">
+    Server does not exist (backup not found is treated as success)
+  </Accordion>
+  <Accordion title="500 Internal Server Error">
+    Failed to delete backup file (permission error, disk error, etc.)
+  </Accordion>
+</AccordionGroup>
+
+## Use Cases
+
+- Free up disk space by removing old backups
+- Clean up failed or corrupted backups
+- Remove backups after migrating to S3
+- Automated backup rotation scripts
+
+## Idempotent Behavior
+
+This endpoint is idempotent:
+
+- If the backup exists, it is deleted → Returns `204`
+- If the backup doesn't exist, no action is taken → Returns `204`
+- Multiple DELETE requests have the same effect as a single request
+
+<Note>
+  The backup is considered successfully deleted even if it never existed. Check backup existence before deletion if you need to distinguish between these cases.
+</Note>
+
+## Best Practices
+
+1. **Verify backup integrity** before deletion in case you need to restore
+2. **Check disk space** after deleting large backups
+3. **Coordinate with Panel** - ensure Panel backup records are updated
+4. **Implement rotation** - delete old backups automatically based on age or count
+5. **Monitor errors** - failed deletions may indicate disk or permission issues
+
+## Backup Rotation Example
+
+Automated rotation to keep only the 5 most recent backups:
+
+```python
+import requests
+
+# Get all backups from Panel
+backups = get_server_backups(server_id)  # Panel API call
+
+# Sort by creation date, oldest first
+backups.sort(key=lambda b: b['created_at'])
+
+# Delete all but the 5 most recent
+for backup in backups[:-5]:
+    requests.delete(
+        f'https://wings.example.com/api/servers/{server_id}/backup/{backup["uuid"]}',
+        headers={'Authorization': f'Bearer {token}'}
+    )
+```
+
+## Source Reference
+
+Implementation: `router/router_server_backup.go:178-199` (deleteServerBackup function)

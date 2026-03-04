@@ -1,0 +1,139 @@
+---
+title: Server Power Action
+api: POST /api/servers/:server/power
+---
+
+Controls the power state of a server. This endpoint triggers power actions asynchronously and returns immediately.
+
+## Authentication
+
+Requires the Wings authentication token in the `Authorization` header:
+
+```
+Authorization: Bearer <token>
+```
+
+## Path Parameters
+
+<ParamField path="server" type="string" required>
+  The UUID of the server
+</ParamField>
+
+## Request Body
+
+<ParamField body="action" type="string" required>
+  The power action to perform. Must be one of:
+  - `start` - Start the server
+  - `stop` - Stop the server gracefully
+  - `restart` - Restart the server
+  - `kill` - Forcefully terminate the server (SIGKILL)
+</ParamField>
+
+<ParamField body="wait_seconds" type="integer" default={30}>
+  Number of seconds to wait for a lock on the power action (0-300). Defaults to 30 if not provided or out of range.
+</ParamField>
+
+## Response
+
+Returns `202 Accepted` when the power action has been queued for processing.
+
+## Error Responses
+
+<ResponseField name="400 Bad Request">
+  Cannot start or restart a suspended server.
+</ResponseField>
+
+<ResponseField name="404 Not Found">
+  The requested server does not exist on this Wings instance.
+</ResponseField>
+
+<ResponseField name="422 Unprocessable Entity">
+  The power action provided was not valid.
+</ResponseField>
+
+## Behavior
+
+### Power Action Locking
+- All actions except `kill` acquire an exclusive lock to prevent concurrent power actions
+- `wait_seconds` controls how long to wait for the lock (default: 30 seconds)
+- `kill` action attempts to acquire lock but proceeds even if it fails
+
+### Action Details
+
+**start**
+- Only works if server state is `offline`
+- Runs pre-boot checks (sync, disk space, permissions)
+- Suspended servers are blocked
+
+**stop**
+- Waits up to 10 minutes for graceful shutdown
+- Uses terminate signal if graceful shutdown fails
+
+**restart**
+- Combines stop + start
+- Waits for complete shutdown before starting
+- Suspended servers are blocked
+
+**kill**
+- Sends SIGKILL to immediately terminate the process
+- Does not wait for locks (bypasses lock contention)
+- Use for stuck or unresponsive servers
+
+### Pre-boot Process (start/restart)
+1. Syncs server configuration with Panel
+2. Checks suspension status
+3. Syncs environment variables and resource limits
+4. Verifies disk space availability
+5. Updates configuration files
+6. Sets file permissions (if enabled in config)
+
+## Example Requests
+
+### Start Server
+```bash
+curl -X POST https://wings.example.com/api/servers/8d3f9a2e-5c7b-4f1e-9d2a-6e8f1c3b5a7d/power \
+  -H "Authorization: Bearer your-wings-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "action": "start"
+  }'
+```
+
+### Restart Server with Custom Wait Time
+```bash
+curl -X POST https://wings.example.com/api/servers/8d3f9a2e-5c7b-4f1e-9d2a-6e8f1c3b5a7d/power \
+  -H "Authorization: Bearer your-wings-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "action": "restart",
+    "wait_seconds": 60
+  }'
+```
+
+### Kill Server
+```bash
+curl -X POST https://wings.example.com/api/servers/8d3f9a2e-5c7b-4f1e-9d2a-6e8f1c3b5a7d/power \
+  -H "Authorization: Bearer your-wings-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "action": "kill"
+  }'
+```
+
+## Example Response
+
+```
+HTTP/1.1 202 Accepted
+```
+
+## Notes
+
+- Power actions run asynchronously in the background
+- Use websockets to monitor actual state changes
+- Errors during async execution are logged but not returned to the API caller
+- Multiple power actions are serialized via exclusive locking
+- The `kill` action bypasses most safety checks and should be used sparingly
+
+## Source Reference
+
+Implemented in `router/router_server.go:53` and `server/power.go:56`

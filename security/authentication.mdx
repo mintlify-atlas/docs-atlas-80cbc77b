@@ -1,0 +1,413 @@
+---
+title: Authentication
+description: Understanding Wings authentication mechanisms and security
+---
+
+Wings implements multiple authentication layers to secure communication between the Panel, users, and server instances. This page covers the authentication mechanisms used throughout the system.
+
+## Panel Authentication
+
+All API requests from the Panel to Wings must include a valid authentication token in the `Authorization` header.
+
+### Token-Based Authentication
+
+Wings uses a Bearer token system for Panel-to-Wings communication:
+
+```go
+// config/config.go:340-344
+type Configuration struct {
+    AuthenticationTokenId string `json:"token_id" yaml:"token_id"`
+    AuthenticationToken   string `json:"token" yaml:"token"`
+    // ...
+}
+```
+
+The authentication token is configured in `/etc/pterodactyl/config.yml`:
+
+```yaml
+token_id: "your-token-id"
+token: "your-secret-token"
+```
+
+### Token Validation
+
+Wings validates incoming requests using constant-time comparison to prevent timing attacks:
+
+```go
+// router/middleware/middleware.go:166-186
+func RequireAuthorization() gin.HandlerFunc {
+    return func(c *gin.Context) {
+        auth := strings.SplitN(c.GetHeader("Authorization"), " ", 2)
+        if len(auth) != 2 || auth[0] != "Bearer" {
+            c.Header("WWW-Authenticate", "Bearer")
+            c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+                "error": "The required authorization heads were not present in the request."
+            })
+            return
+        }
+
+        if subtle.ConstantTimeCompare([]byte(auth[1]), []byte(config.Get().Token.Token)) != 1 {
+            c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+                "error": "You are not authorized to access this endpoint."
+            })
+            return
+        }
+        c.Next()
+    }
+}
+```
+
+### Environment Variables
+
+Tokens can be loaded from environment variables or files:
+
+```bash
+export WINGS_TOKEN_ID="your-token-id"
+export WINGS_TOKEN="your-secret-token"
+```
+
+Or using systemd credentials:
+
+```bash
+export WINGS_TOKEN="file://${CREDENTIALS_DIRECTORY}/token"
+```
+
+See `config/config.go:844-865` for the token expansion logic.
+
+## WebSocket Authentication
+
+WebSocket connections use JWT (JSON Web Tokens) for authentication, separate from the Panel API token.
+
+### JWT Token Structure
+
+The WebSocket JWT payload includes:
+
+```go
+// router/tokens/websocket.go:50-59
+type WebsocketPayload struct {
+    jwt.Payload
+    UserUUID    string   `json:"user_uuid"`
+    ServerUUID  string   `json:"server_uuid"`
+    Permissions []string `json:"permissions"`
+}
+```
+
+### Token Generation
+
+The Panel generates JWTs signed with HMAC-SHA256:
+
+```go
+// config/config.go:446-450
+func GetJwtAlgorithm() *jwt.HMACSHA {
+    mu.RLock()
+    defer mu.RUnlock()
+    return _jwtAlgo
+}
+```
+
+The JWT algorithm is initialized with the Wings token:
+
+```go
+// config/config.go:404-406
+if _config == nil || _config.Token.Token != token {
+    _jwtAlgo = jwt.NewHS256([]byte(token))
+}
+```
+
+### WebSocket Authentication Flow
+
+1. **Client connects** to `/api/servers/:server/ws`
+2. **Client sends auth event** with JWT token:
+
+```json
+{
+  "event": "auth",
+  "args": ["eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."]
+}
+```
+
+3. **Wings validates the token**:
+
+```go
+// router/websocket/websocket.go:66-82
+func NewTokenPayload(token []byte) (*tokens.WebsocketPayload, error) {
+    var payload tokens.WebsocketPayload
+    if err := tokens.ParseToken(token, &payload); err != nil {
+        return nil, err
+    }
+
+    if payload.Denylisted() {
+        return nil, ErrJwtOnDenylist
+    }
+
+    if !payload.HasPermission(PermissionConnect) {
+        return nil, ErrJwtNoConnectPerm
+    }
+
+    return &payload, nil
+}
+```
+
+4. **Wings responds** with authentication success:
+
+```json
+{
+  "event": "auth success"
+}
+```
+
+### Token Validation
+
+Wings validates tokens using the `ParseToken` function:
+
+```go
+// router/tokens/parser.go:20-29
+func ParseToken(token []byte, data TokenData) error {
+    verifyOptions := jwt.ValidatePayload(
+        data.GetPayload(),
+        jwt.ExpirationTimeValidator(time.Now()),
+    )
+
+    _, err := jwt.Verify(token, config.GetJwtAlgorithm(), &data, verifyOptions)
+
+    return err
+}
+```
+
+### Token Denylist
+
+Wings maintains a denylist to invalidate tokens:
+
+```go
+// router/tokens/websocket.go:80-111
+func (p *WebsocketPayload) Denylisted() bool {
+    if p.IssuedAt == nil {
+        return true
+    }
+
+    // Tokens issued before Wings boot are invalid
+    if p.IssuedAt.Time.Before(wingsBootTime) {
+        return true
+    }
+
+    // Check user-specific denylist
+    if t, ok := userDenylist.Load(strings.Join([]string{p.ServerUUID, p.UserUUID}, ":")); ok {
+        if p.IssuedAt.Time.Before(t.(time.Time)) {
+            return true
+        }
+    }
+
+    return false
+}
+```
+
+To deny all tokens for a user:
+
+```go
+tokens.DenyForServer(serverUUID, userUUID)
+```
+
+### WebSocket Permissions
+
+Permissions control what actions users can perform:
+
+```go
+// router/websocket/websocket.go:30-39
+const (
+    PermissionConnect          = "websocket.connect"
+    PermissionSendCommand      = "control.console"
+    PermissionSendPowerStart   = "control.start"
+    PermissionSendPowerStop    = "control.stop"
+    PermissionSendPowerRestart = "control.restart"
+    PermissionReceiveErrors    = "admin.websocket.errors"
+    PermissionReceiveInstall   = "admin.websocket.install"
+    PermissionReceiveTransfer  = "admin.websocket.transfer"
+    PermissionReceiveBackups   = "backup.read"
+)
+```
+
+Permission checking:
+
+```go
+// router/tokens/websocket.go:113-125
+func (p *WebsocketPayload) HasPermission(permission string) bool {
+    p.RLock()
+    defer p.RUnlock()
+
+    for _, k := range p.Permissions {
+        if k == permission || (!strings.HasPrefix(permission, "admin") && k == "*") {
+            return !p.Denylisted()
+        }
+    }
+
+    return false
+}
+```
+
+## SFTP Authentication
+
+SFTP uses a separate authentication system with both password and public key support.
+
+### SFTP Configuration
+
+```go
+// config/config.go:64-72
+type SftpConfiguration struct {
+    Address  string `default:"0.0.0.0" json:"bind_address" yaml:"bind_address"`
+    Port     int    `default:"2022" json:"bind_port" yaml:"bind_port"`
+    ReadOnly bool   `default:"false" yaml:"read_only"`
+}
+```
+
+### Username Validation
+
+SFTP usernames follow the format `username.serverid`:
+
+```go
+// sftp/server.go:30
+var validUsernameRegexp = regexp.MustCompile(`^(?i)(.+)\.([a-z0-9]{8})$`)
+```
+
+### Authentication Methods
+
+Wings supports two SFTP authentication methods:
+
+**Password Authentication:**
+
+```go
+// sftp/server.go:88-90
+PasswordCallback: func(conn ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
+    return c.makeCredentialsRequest(conn, remote.SftpAuthPassword, string(password))
+},
+```
+
+**Public Key Authentication:**
+
+```go
+// sftp/server.go:91-93
+PublicKeyCallback: func(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+    return c.makeCredentialsRequest(conn, remote.SftpAuthPublicKey, string(ssh.MarshalAuthorizedKey(key)))
+},
+```
+
+### Panel Validation
+
+Wings validates SFTP credentials against the Panel:
+
+```go
+// sftp/server.go:212-238
+func (c *SFTPServer) makeCredentialsRequest(conn ssh.ConnMetadata, t remote.SftpAuthRequestType, p string) (*ssh.Permissions, error) {
+    request := remote.SftpAuthRequest{
+        Type:          t,
+        User:          conn.User(),
+        Pass:          p,
+        IP:            conn.RemoteAddr().String(),
+        SessionID:     conn.SessionID(),
+        ClientVersion: conn.ClientVersion(),
+    }
+
+    if !validUsernameRegexp.MatchString(request.User) {
+        return nil, &remote.SftpInvalidCredentialsError{}
+    }
+
+    resp, err := c.manager.Client().ValidateSftpCredentials(context.Background(), request)
+    if err != nil {
+        return nil, err
+    }
+
+    permissions := ssh.Permissions{
+        Extensions: map[string]string{
+            "uuid":        resp.Server,
+            "user":        resp.User,
+            "permissions": strings.Join(resp.Permissions, ","),
+        },
+    }
+
+    return &permissions, nil
+}
+```
+
+### SFTP Permissions
+
+```go
+// sftp/handler.go:20-26
+const (
+    PermissionFileRead        = "file.read"
+    PermissionFileReadContent = "file.read-content"
+    PermissionFileCreate      = "file.create"
+    PermissionFileUpdate      = "file.update"
+    PermissionFileDelete      = "file.delete"
+)
+```
+
+## Signed Download URLs
+
+File and backup downloads use one-time JWT tokens:
+
+```go
+// router/tokens/file.go:7-12
+type FilePayload struct {
+    jwt.Payload
+    FilePath   string `json:"file_path"`
+    ServerUuid string `json:"server_uuid"`
+    UniqueId   string `json:"unique_id"`
+}
+```
+
+### One-Time Token Validation
+
+```go
+// router/tokens/file.go:23-25
+func (p *FilePayload) IsUniqueRequest() bool {
+    return getTokenStore().IsValidToken(p.UniqueId)
+}
+```
+
+This ensures download URLs can only be used once, see `router/router_download.go:75-110`.
+
+## Security Best Practices
+
+### Token Storage
+
+- Store tokens in `/etc/pterodactyl/config.yml` with `0600` permissions
+- Use systemd `LoadCredential` for enhanced security
+- Never commit tokens to version control
+
+### Token Rotation
+
+Rotate the Wings token periodically:
+
+1. Update token in Panel
+2. Update `/etc/pterodactyl/config.yml`
+3. Restart Wings: `systemctl restart wings`
+
+### Network Security
+
+- Use HTTPS/WSS for all connections (see [SSL Certificates](/security/ssl-certificates))
+- Configure `trusted_proxies` if behind a proxy
+- Implement firewall rules (see [Best Practices](/security/best-practices))
+
+### Rate Limiting
+
+WebSocket connections include rate limiting:
+
+```go
+// router/router_server_ws.go:114-132
+var throttled bool
+rl := rate.NewLimiter(rate.Every(time.Millisecond*200), 10)
+
+for {
+    if !rl.Allow() {
+        if !throttled {
+            throttled = true
+            _ = handler.Connection.WriteJSON(websocket.Message{
+                Event: websocket.ThrottledEvent,
+                Args:  []string{"global"},
+            })
+        }
+        continue
+    }
+}
+```
+
+This prevents abuse by limiting to 10 messages per 200ms.

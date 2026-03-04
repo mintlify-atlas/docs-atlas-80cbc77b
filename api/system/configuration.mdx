@@ -1,0 +1,460 @@
+---
+title: Update Configuration
+description: Update the runtime configuration of a Wings instance from the Pterodactyl Panel
+---
+
+## Endpoint
+
+```http
+POST /api/update
+```
+
+Updates the running configuration for the Wings instance. This endpoint allows the Pterodactyl Panel to push configuration updates to Wings without requiring a restart. The new configuration is validated, written to disk, and applied to the running instance.
+
+## Authentication
+
+This endpoint requires authentication using a Bearer token in the `Authorization` header.
+
+```http
+Authorization: Bearer <your-token>
+```
+
+## Request Body
+
+The request body should contain a complete Wings configuration object in JSON format. This follows the same structure as the `config.yml` file.
+
+<ParamField body="debug" type="boolean" optional>
+  Enable debug mode for verbose logging
+</ParamField>
+
+<ParamField body="app_name" type="string" default="Pterodactyl">
+  Application name for Wings
+</ParamField>
+
+<ParamField body="uuid" type="string" required>
+  Unique identifier for this node in the Panel
+</ParamField>
+
+<ParamField body="token_id" type="string" required>
+  Token identifier for authentication
+</ParamField>
+
+<ParamField body="token" type="string" required>
+  Authentication token for API requests
+</ParamField>
+
+<ParamField body="api" type="object" required>
+  API server configuration
+  
+  <Expandable title="api properties">
+    <ParamField body="api.host" type="string" default="0.0.0.0">
+      Host address to bind the API server to
+    </ParamField>
+    
+    <ParamField body="api.port" type="integer" default="8080">
+      Port to bind the API server to
+    </ParamField>
+    
+    <ParamField body="api.ssl" type="object">
+      SSL/TLS configuration
+      
+      <Expandable title="ssl properties">
+        <ParamField body="api.ssl.enabled" type="boolean">
+          Enable SSL/TLS
+        </ParamField>
+        
+        <ParamField body="api.ssl.cert" type="string">
+          Path to SSL certificate file
+        </ParamField>
+        
+        <ParamField body="api.ssl.key" type="string">
+          Path to SSL private key file
+        </ParamField>
+      </Expandable>
+    </ParamField>
+    
+    <ParamField body="api.upload_limit" type="integer" default="100">
+      Maximum file upload size in MB
+    </ParamField>
+    
+    <ParamField body="api.trusted_proxies" type="array">
+      List of trusted proxy IP addresses
+    </ParamField>
+    
+    <ParamField body="api.disable_remote_download" type="boolean">
+      Disable remote file download functionality
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField body="system" type="object" required>
+  System configuration settings
+  
+  <Expandable title="system properties">
+    <ParamField body="system.root_directory" type="string" default="/var/lib/pterodactyl">
+      Root directory for all Pterodactyl data
+    </ParamField>
+    
+    <ParamField body="system.log_directory" type="string" default="/var/log/pterodactyl">
+      Directory for Wings logs
+    </ParamField>
+    
+    <ParamField body="system.data" type="string" default="/var/lib/pterodactyl/volumes">
+      Directory for server data
+    </ParamField>
+    
+    <ParamField body="system.archive_directory" type="string" default="/var/lib/pterodactyl/archives">
+      Directory for server transfer archives
+    </ParamField>
+    
+    <ParamField body="system.backup_directory" type="string" default="/var/lib/pterodactyl/backups">
+      Directory for server backups
+    </ParamField>
+    
+    <ParamField body="system.tmp_directory" type="string" default="/tmp/pterodactyl">
+      Temporary directory for Wings operations
+    </ParamField>
+    
+    <ParamField body="system.username" type="string" default="pterodactyl">
+      System user that owns server files
+    </ParamField>
+    
+    <ParamField body="system.timezone" type="string">
+      Timezone for containers (auto-detected if not set)
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField body="docker" type="object" required>
+  Docker configuration settings (see [Docker Settings](/configuration/docker-settings) for details)
+</ParamField>
+
+<ParamField body="remote" type="string" required>
+  Panel URL for API communication
+</ParamField>
+
+<ParamField body="remote_query" type="object">
+  Remote query configuration
+  
+  <Expandable title="remote_query properties">
+    <ParamField body="remote_query.timeout" type="integer" default="30">
+      Request timeout in seconds for Panel API calls
+    </ParamField>
+    
+    <ParamField body="remote_query.boot_servers_per_page" type="integer" default="50">
+      Number of servers to load per request during boot
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField body="allowed_mounts" type="array">
+  List of allowed host paths for server mounts
+</ParamField>
+
+<ParamField body="allowed_origins" type="array">
+  Additional CORS allowed origins
+</ParamField>
+
+<ParamField body="ignore_panel_config_updates" type="boolean" default="false">
+  When enabled, configuration updates from the Panel are ignored
+</ParamField>
+
+## Response
+
+<ResponseField name="applied" type="boolean">
+  Indicates whether the configuration update was applied. Returns `false` if `ignore_panel_config_updates` is enabled in the current configuration.
+</ResponseField>
+
+## Behavior
+
+### Configuration Update Flow
+
+1. **Validation**: The incoming configuration is validated and merged with defaults
+2. **SSL Certificate Handling**: If SSL certificates use Let's Encrypt default paths (`/etc/letsencrypt/live/`), the existing certificate paths are preserved to prevent overwriting manually configured locations
+3. **Disk Write**: The configuration is written to disk at the config file location
+4. **Runtime Update**: If the write succeeds, the global configuration state is updated
+5. **Response**: Returns whether the update was applied
+
+### Ignored Updates
+
+When `ignore_panel_config_updates` is set to `true` in the Wings configuration file, this endpoint will:
+- Return `{"applied": false}`
+- Not write any changes to disk
+- Not update the runtime configuration
+
+This is useful for Wings instances that need to maintain custom configurations independent of Panel updates.
+
+<Warning>
+  Configuration updates are applied immediately to the running Wings instance without requiring a restart. However, some changes (like port bindings) may not take full effect until Wings is restarted.
+</Warning>
+
+## Example Requests
+
+<CodeGroup>
+```bash cURL
+curl -X POST "https://wings.example.com/api/update" \
+  -H "Authorization: Bearer your-token-here" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "uuid": "3e3e4e5e-6f7f-8a8a-9b9b-0c0c0d0d0e0e",
+    "token_id": "abc123",
+    "token": "your-authentication-token",
+    "api": {
+      "host": "0.0.0.0",
+      "port": 8080,
+      "ssl": {
+        "enabled": true,
+        "cert": "/etc/letsencrypt/live/wings.example.com/fullchain.pem",
+        "key": "/etc/letsencrypt/live/wings.example.com/privkey.pem"
+      },
+      "upload_limit": 100
+    },
+    "system": {
+      "root_directory": "/var/lib/pterodactyl",
+      "data": "/var/lib/pterodactyl/volumes",
+      "username": "pterodactyl"
+    },
+    "remote": "https://panel.example.com"
+  }'
+```
+
+```javascript JavaScript
+const config = {
+  uuid: '3e3e4e5e-6f7f-8a8a-9b9b-0c0c0d0d0e0e',
+  token_id: 'abc123',
+  token: 'your-authentication-token',
+  api: {
+    host: '0.0.0.0',
+    port: 8080,
+    ssl: {
+      enabled: true,
+      cert: '/etc/letsencrypt/live/wings.example.com/fullchain.pem',
+      key: '/etc/letsencrypt/live/wings.example.com/privkey.pem'
+    },
+    upload_limit: 100
+  },
+  system: {
+    root_directory: '/var/lib/pterodactyl',
+    data: '/var/lib/pterodactyl/volumes',
+    username: 'pterodactyl'
+  },
+  remote: 'https://panel.example.com'
+};
+
+const response = await fetch('https://wings.example.com/api/update', {
+  method: 'POST',
+  headers: {
+    'Authorization': 'Bearer your-token-here',
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify(config)
+});
+
+const result = await response.json();
+console.log('Configuration applied:', result.applied);
+```
+
+```python Python
+import requests
+
+config = {
+    'uuid': '3e3e4e5e-6f7f-8a8a-9b9b-0c0c0d0d0e0e',
+    'token_id': 'abc123',
+    'token': 'your-authentication-token',
+    'api': {
+        'host': '0.0.0.0',
+        'port': 8080,
+        'ssl': {
+            'enabled': True,
+            'cert': '/etc/letsencrypt/live/wings.example.com/fullchain.pem',
+            'key': '/etc/letsencrypt/live/wings.example.com/privkey.pem'
+        },
+        'upload_limit': 100
+    },
+    'system': {
+        'root_directory': '/var/lib/pterodactyl',
+        'data': '/var/lib/pterodactyl/volumes',
+        'username': 'pterodactyl'
+    },
+    'remote': 'https://panel.example.com'
+}
+
+response = requests.post(
+    'https://wings.example.com/api/update',
+    headers={'Authorization': 'Bearer your-token-here'},
+    json=config
+)
+
+result = response.json()
+print(f"Configuration applied: {result['applied']}")
+```
+
+```go Go
+package main
+
+import (
+    "bytes"
+    "encoding/json"
+    "fmt"
+    "net/http"
+)
+
+type Config struct {
+    UUID    string         `json:"uuid"`
+    TokenID string         `json:"token_id"`
+    Token   string         `json:"token"`
+    API     map[string]any `json:"api"`
+    System  map[string]any `json:"system"`
+    Remote  string         `json:"remote"`
+}
+
+func main() {
+    config := Config{
+        UUID:    "3e3e4e5e-6f7f-8a8a-9b9b-0c0c0d0d0e0e",
+        TokenID: "abc123",
+        Token:   "your-authentication-token",
+        Remote:  "https://panel.example.com",
+    }
+    
+    jsonData, _ := json.Marshal(config)
+    req, _ := http.NewRequest("POST", "https://wings.example.com/api/update", bytes.NewBuffer(jsonData))
+    req.Header.Set("Authorization", "Bearer your-token-here")
+    req.Header.Set("Content-Type", "application/json")
+    
+    client := &http.Client{}
+    resp, err := client.Do(req)
+    if err != nil {
+        panic(err)
+    }
+    defer resp.Body.Close()
+    
+    var result map[string]bool
+    json.NewDecoder(resp.Body).Decode(&result)
+    fmt.Printf("Configuration applied: %v\n", result["applied"])
+}
+```
+</CodeGroup>
+
+## Example Responses
+
+<CodeGroup>
+```json Success - Applied
+{
+  "applied": true
+}
+```
+
+```json Success - Ignored
+{
+  "applied": false
+}
+```
+</CodeGroup>
+
+## Error Responses
+
+<ResponseExample>
+```json 400 Bad Request
+{
+  "error": "Invalid JSON payload"
+}
+```
+
+```json 401 Unauthorized
+{
+  "error": "Unauthorized"
+}
+```
+
+```json 500 Internal Server Error
+{
+  "error": "Failed to write configuration to disk"
+}
+```
+</ResponseExample>
+
+## SSL Certificate Handling
+
+The endpoint includes special logic for SSL certificates to prevent accidental overwrites:
+
+```javascript
+// If the Panel sends Let's Encrypt default paths
+if (config.api.ssl.key.startsWith('/etc/letsencrypt/live/')) {
+  // Wings preserves existing custom certificate paths
+  // This prevents overwriting manually configured SSL certificates
+}
+```
+
+If you need to update SSL certificate paths, ensure they don't use the default Let's Encrypt location pattern, or manually update the configuration file.
+
+## Use Cases
+
+### Automated Panel Updates
+
+The Pterodactyl Panel automatically calls this endpoint when node configuration is updated:
+
+```python
+def update_node_configuration(node_id, new_config):
+    """Called by Panel when admin updates node settings"""
+    response = requests.post(
+        f'https://{node.fqdn}:{node.port}/api/update',
+        headers={'Authorization': f'Bearer {node.daemon_token}'},
+        json=new_config
+    )
+    
+    if response.json()['applied']:
+        print(f'Configuration updated for node {node_id}')
+    else:
+        print(f'Node {node_id} is ignoring Panel configuration updates')
+```
+
+### Manual Configuration Sync
+
+You can manually sync configuration from your Panel to Wings:
+
+```bash
+#!/bin/bash
+# Sync Wings configuration from Panel
+
+curl -X POST "https://wings.example.com/api/update" \
+  -H "Authorization: Bearer $(cat /etc/pterodactyl/config.yml | grep '^token:' | awk '{print $2}')" \
+  -H "Content-Type: application/json" \
+  -d @/tmp/new-config.json
+```
+
+## Implementation Details
+
+The configuration update process is implemented in `router/router_system.go:122-158`:
+
+1. **Check ignore flag**: If `IgnorePanelConfigUpdates` is true, return `{"applied": false}` immediately
+2. **Parse JSON**: Bind the incoming JSON to a `Configuration` struct
+3. **Preserve SSL paths**: Check for Let's Encrypt default paths and preserve existing custom paths
+4. **Write to disk**: Call `config.WriteToDisk()` to persist the new configuration
+5. **Update runtime**: Call `config.Set()` to apply changes to the running instance
+6. **Return result**: Return `{"applied": true}` on success
+
+<Note>
+  The configuration file location is determined by the `--config` flag used when starting Wings. By default, this is `/etc/pterodactyl/config.yml`.
+</Note>
+
+## Security Considerations
+
+<Warning>
+  This endpoint can modify critical Wings configuration. Ensure your authentication token is kept secure and only accessible by the Pterodactyl Panel.
+</Warning>
+
+- The endpoint requires a valid Bearer token matching the configured `AuthenticationToken`
+- Configuration changes are written to disk with restricted file permissions
+- Invalid configurations will cause the request to fail without modifying the existing config
+- SSL certificate paths are validated and protected from accidental overwrites
+
+## Related Endpoints
+
+- [Get System Information](/api/system/information) - Retrieve system and Wings version information
+- [Get Servers](/api/servers/list) - List all servers managed by this Wings instance
+
+## Related Configuration
+
+- [Configuration File](/configuration/config-file) - Complete configuration file reference
+- [System Settings](/configuration/system-settings) - System configuration options
+- [SSL/TLS Configuration](/configuration/ssl-tls) - SSL certificate setup

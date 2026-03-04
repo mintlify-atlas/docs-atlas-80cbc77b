@@ -1,0 +1,497 @@
+---
+title: Common Issues
+description: Solutions to frequently encountered problems with Wings
+---
+
+This page covers common issues you may encounter when running Pterodactyl Wings and their solutions.
+
+## Installation Issues
+
+<AccordionGroup>
+  <Accordion title="Configuration file not found">
+    **Error Message:**
+    ```
+    Error: Configuration File Not Found
+    Wings was not able to locate your configuration file
+    ```
+
+    **Solution:**
+    
+    Wings looks for the configuration file at `/etc/pterodactyl/config.yml` by default (defined in `config/config.go:31`).
+
+    1. Ensure the configuration file exists:
+       ```bash
+       ls -la /etc/pterodactyl/config.yml
+       ```
+
+    2. If using a custom location, specify it with the `--config` flag:
+       ```bash
+       wings --config /path/to/config.yml
+       ```
+
+    3. Verify file permissions (should be readable by Wings):
+       ```bash
+       chmod 600 /etc/pterodactyl/config.yml
+       ```
+  </Accordion>
+
+  <Accordion title="Failed to create pterodactyl system user">
+    **Error Message:**
+    ```
+    failed to create pterodactyl system user
+    ```
+
+    **Solution:**
+
+    Wings requires a dedicated system user to own server files. The default username is `pterodactyl` (configurable in `config.yml`).
+
+    **For most Linux distributions:**
+    ```bash
+    useradd --system --no-create-home --shell /usr/sbin/nologin pterodactyl
+    ```
+
+    **For Alpine Linux:**
+    ```bash
+    addgroup -S pterodactyl
+    adduser -S -D -H -G pterodactyl -s /sbin/nologin pterodactyl
+    ```
+
+    **Verify the user was created:**
+    ```bash
+    id pterodactyl
+    ```
+  </Accordion>
+
+  <Accordion title="Failed to configure system directories">
+    **Error Message:**
+    ```
+    failed to configure system directories for pterodactyl
+    ```
+
+    **Solution:**
+
+    Wings needs to create several directories. Ensure the parent directories exist and have proper permissions:
+
+    **Default directories** (from `config/config.go`):
+    - Root: `/var/lib/pterodactyl`
+    - Data: `/var/lib/pterodactyl/volumes`
+    - Archives: `/var/lib/pterodactyl/archives`
+    - Backups: `/var/lib/pterodactyl/backups`
+    - Logs: `/var/log/pterodactyl`
+    - Temp: `/tmp/pterodactyl`
+
+    Create directories manually:
+    ```bash
+    mkdir -p /var/lib/pterodactyl/{volumes,archives,backups}
+    mkdir -p /var/log/pterodactyl
+    mkdir -p /tmp/pterodactyl
+    chown -R pterodactyl:pterodactyl /var/lib/pterodactyl
+    chown -R pterodactyl:pterodactyl /var/log/pterodactyl
+    ```
+  </Accordion>
+
+  <Accordion title="Failed to configure log rotation">
+    **Error Message:**
+    ```
+    failed to configure log rotation on the system
+    ```
+
+    **Solution:**
+
+    Wings automatically creates a logrotate configuration at `/etc/logrotate.d/wings` if the directory exists.
+
+    1. Verify logrotate is installed:
+       ```bash
+       which logrotate
+       ```
+
+    2. Check if the directory exists:
+       ```bash
+       ls -ld /etc/logrotate.d
+       ```
+
+    3. If you don't want automatic log rotation, disable it in `config.yml`:
+       ```yaml
+       system:
+         enable_log_rotate: false
+       ```
+
+    4. Manually create the logrotate config if needed:
+       ```bash
+       cat > /etc/logrotate.d/wings << 'EOF'
+       /var/log/pterodactyl/wings.log {
+           size 10M
+           compress
+           delaycompress
+           dateext
+           maxage 7
+           missingok
+           notifempty
+           postrotate
+               /usr/bin/systemctl kill -s HUP wings.service >/dev/null 2>&1 || true
+           endscript
+       }
+       EOF
+       ```
+  </Accordion>
+</AccordionGroup>
+
+## Docker Issues
+
+<AccordionGroup>
+  <Accordion title="Failed to configure docker environment">
+    **Error Message:**
+    ```
+    failed to configure docker environment
+    ```
+
+    **Possible Causes & Solutions:**
+
+    1. **Docker is not running:**
+       ```bash
+       systemctl status docker
+       systemctl start docker
+       ```
+
+    2. **Docker socket permission denied:**
+       ```bash
+       # Add the user running Wings to the docker group
+       usermod -aG docker $USER
+       # Or if running as root, check socket permissions
+       ls -la /var/run/docker.sock
+       ```
+
+    3. **Docker API version mismatch:**
+       Wings uses API version negotiation. Check your Docker version:
+       ```bash
+       docker version
+       ```
+       Ensure you're running Docker 20.10 or newer.
+
+    4. **Network creation failed:**
+       The default network name is `pterodactyl_nw`. Check for conflicts:
+       ```bash
+       docker network ls
+       docker network inspect pterodactyl_nw
+       ```
+
+       If there's a conflict, remove the old network:
+       ```bash
+       docker network rm pterodactyl_nw
+       ```
+  </Accordion>
+
+  <Accordion title="Container fails to start or times out">
+    **Error Context:**
+    Wings uses a 30-second timeout when checking container status during boot to prevent hanging (see `cmd/root.go:220`).
+
+    **Solutions:**
+
+    1. **Check Docker daemon logs:**
+       ```bash
+       journalctl -u docker -n 100 --no-pager
+       ```
+
+    2. **Inspect the container:**
+       ```bash
+       docker ps -a | grep <server-uuid>
+       docker logs <container-id>
+       ```
+
+    3. **Check available disk space:**
+       ```bash
+       df -h
+       docker system df
+       ```
+
+    4. **Verify image exists:**
+       ```bash
+       docker images
+       ```
+       If the image is missing, Wings will pull it on first start (may take time).
+
+    5. **Check for resource limits:**
+       Ensure the server has enough memory and CPU allocated.
+  </Accordion>
+
+  <Accordion title="Network interface issues">
+    **Error:** Issues with `pterodactyl0` bridge interface
+
+    **Solution:**
+
+    The network configuration is defined in `config.yml`:
+    ```yaml
+    docker:
+      network:
+        interface: 172.18.0.1
+        name: pterodactyl_nw
+        ispn: false
+        driver: bridge
+        network_mode: pterodactyl_nw
+        is_internal: false
+        enable_icc: true
+        network_mtu: 1500
+        interfaces:
+          v4:
+            subnet: 172.18.0.0/16
+            gateway: 172.18.0.1
+          v6:
+            subnet: fdba:17c8:6c94::/64
+            gateway: fdba:17c8:6c94::1011
+    ```
+
+    1. **Check for IP conflicts:**
+       ```bash
+       ip addr show
+       ```
+       Ensure `172.18.0.0/16` doesn't conflict with existing networks.
+
+    2. **Recreate the network:**
+       ```bash
+       docker network rm pterodactyl_nw
+       systemctl restart wings
+       ```
+
+    3. **For custom networks:** Edit `config.yml` and adjust the subnet/gateway.
+  </Accordion>
+</AccordionGroup>
+
+## Connection Problems
+
+<AccordionGroup>
+  <Accordion title="Cannot connect to Wings API">
+    **Default Configuration:**
+    - Host: `0.0.0.0`
+    - Port: `8080`
+    - SSL: Disabled by default
+
+    **Troubleshooting:**
+
+    1. **Verify Wings is listening:**
+       ```bash
+       netstat -tlnp | grep :8080
+       # or
+       ss -tlnp | grep :8080
+       ```
+
+    2. **Check firewall rules:**
+       ```bash
+       # UFW
+       ufw status
+       ufw allow 8080/tcp
+
+       # firewalld
+       firewall-cmd --list-all
+       firewall-cmd --permanent --add-port=8080/tcp
+       firewall-cmd --reload
+
+       # iptables
+       iptables -L -n | grep 8080
+       ```
+
+    3. **Test connectivity:**
+       ```bash
+       curl -k https://your-wings-ip:8080/api/system
+       ```
+
+    4. **Check SSL configuration** in `config.yml`:
+       ```yaml
+       api:
+         host: 0.0.0.0
+         port: 8080
+         ssl:
+           enabled: true
+           cert: /etc/letsencrypt/live/example.com/fullchain.pem
+           key: /etc/letsencrypt/live/example.com/privkey.pem
+       ```
+
+    5. **Verify certificate validity:**
+       ```bash
+       openssl x509 -in /path/to/cert.pem -text -noout
+       ```
+  </Accordion>
+
+  <Accordion title="SFTP connection issues">
+    **Default SFTP Configuration:**
+    - Address: `0.0.0.0`
+    - Port: `2022`
+
+    **Common Issues:**
+
+    1. **Port not accessible:**
+       ```bash
+       netstat -tlnp | grep :2022
+       # Allow in firewall
+       ufw allow 2022/tcp
+       ```
+
+    2. **Invalid credentials:**
+       - SFTP uses the format: `username.serverid`
+       - The username must match the regex pattern: `^(?i)(.+)\.([a-z0-9]{8})$`
+       - Password is verified against the Panel API
+
+    3. **Authentication failures:**
+       Check Wings logs:
+       ```bash
+       tail -f /var/log/pterodactyl/wings.log | grep sftp
+       ```
+
+       Common error: `the credentials provided were invalid`
+       - Verify Panel is accessible from Wings
+       - Check API token in `config.yml`
+
+    4. **Read-only mode:**
+       If SFTP is in read-only mode, check `config.yml`:
+       ```yaml
+       system:
+         sftp:
+           read_only: false
+       ```
+
+    5. **Check SFTP server logs:**
+       Wings logs SFTP connections with the client IP:
+       ```bash
+       journalctl -u wings -f | grep sftp
+       ```
+  </Accordion>
+
+  <Accordion title="Panel cannot communicate with Wings">
+    **Error:** Panel shows Wings as offline or unreachable
+
+    **Checklist:**
+
+    1. **Verify Wings is running:**
+       ```bash
+       systemctl status wings
+       journalctl -u wings -n 50
+       ```
+
+    2. **Check token configuration:**
+       The token in Wings `config.yml` must match the Panel:
+       ```yaml
+       token_id: "your-token-id"
+       token: "your-secret-token"
+       ```
+
+       Wings also supports environment variables:
+       ```bash
+       export WINGS_TOKEN_ID="your-token-id"
+       export WINGS_TOKEN="your-secret-token"
+       ```
+
+       And file-based tokens (useful with systemd credentials):
+       ```yaml
+       token: "file://${CREDENTIALS_DIRECTORY}/token"
+       ```
+
+    3. **Verify remote query settings** in `config.yml`:
+       ```yaml
+       remote: "https://panel.example.com"
+       remote_query:
+         timeout: 30
+         boot_servers_per_page: 50
+       ```
+
+    4. **Test Panel connectivity from Wings:**
+       ```bash
+       curl -I https://panel.example.com
+       ```
+
+    5. **Check for certificate errors:**
+       If using self-signed certificates, you may need:
+       ```bash
+       wings --ignore-certificate-errors
+       ```
+       <Warning>
+       Only use `--ignore-certificate-errors` for testing. In production, use valid SSL certificates.
+       </Warning>
+  </Accordion>
+</AccordionGroup>
+
+## Configuration Issues
+
+<AccordionGroup>
+  <Accordion title="Failed to detect system timezone">
+    **Error Message:**
+    ```
+    failed to detect system timezone or use supplied configuration value
+    ```
+
+    **Solution:**
+
+    Wings attempts to auto-detect timezone from:
+    1. `TZ` environment variable
+    2. `/etc/timezone` file
+    3. `timedatectl` command
+    4. Falls back to `UTC`
+
+    **Manual configuration** in `config.yml`:
+    ```yaml
+    system:
+      timezone: America/New_York
+    ```
+
+    **Verify timezone:**
+    ```bash
+    timedatectl
+    cat /etc/timezone
+    ```
+  </Accordion>
+
+  <Accordion title="Server state persistence issues">
+    **Context:**
+    Wings saves server states to disk every minute in `/var/lib/pterodactyl/states.json` to survive reboots.
+
+    **If servers don't restart after reboot:**
+
+    1. **Check states file:**
+       ```bash
+       cat /var/lib/pterodactyl/states.json
+       ```
+
+    2. **Verify file permissions:**
+       ```bash
+       ls -la /var/lib/pterodactyl/states.json
+       chown pterodactyl:pterodactyl /var/lib/pterodactyl/states.json
+       ```
+
+    3. **Check Wings logs for state errors:**
+       ```bash
+       journalctl -u wings | grep "states"
+       ```
+  </Accordion>
+
+  <Accordion title="Permission errors on server files">
+    **Error:** Server cannot write to files or directories
+
+    **Solution:**
+
+    Wings uses the configured system user (default: `pterodactyl` UID/GID 988).
+
+    1. **Check current ownership:**
+       ```bash
+       ls -la /var/lib/pterodactyl/volumes/<server-uuid>/
+       ```
+
+    2. **Fix ownership recursively:**
+       ```bash
+       chown -R pterodactyl:pterodactyl /var/lib/pterodactyl/volumes/<server-uuid>/
+       ```
+
+    3. **Enable automatic permission checks** in `config.yml`:
+       ```yaml
+       system:
+         check_permissions_on_boot: true
+       ```
+
+    <Warning>
+    Setting `check_permissions_on_boot: false` can speed up boot times but may cause permission issues.
+    </Warning>
+  </Accordion>
+</AccordionGroup>
+
+## See Also
+
+- [Debugging Guide](/troubleshooting/debugging) - Advanced debugging techniques
+- [Performance Tuning](/troubleshooting/performance) - Optimize Wings performance
+- [Configuration Reference](/configuration/config-file) - Complete configuration options

@@ -1,80 +1,501 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quick Start Guide
+description: Get Wings up and running in minutes with this step-by-step guide
 ---
 
-## Get started in three steps
+## Prerequisites
 
-Get your documentation site running locally and make your first customization.
-
-### Step 1: Set up your local environment
+Before installing Wings, ensure your system meets the following requirements:
 
 <AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
+  <Accordion title="Operating System">
+    Wings runs on Linux-based operating systems. Supported distributions include:
+    - Ubuntu 20.04+ (recommended)
+    - Debian 11+
+    - CentOS 8+ / Rocky Linux / AlmaLinux
+    - Fedora 35+
   </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
+
+  <Accordion title="Docker Installation">
+    Wings requires Docker to be installed and running:
+    - Docker Engine 20.10 or newer
+    - Docker must be running and accessible by the Wings process
+    - The user running Wings needs permission to interact with Docker
+  </Accordion>
+
+  <Accordion title="Panel Setup">
+    You need a running Pterodactyl Panel instance:
+    - Panel version compatible with Wings
+    - A node created in the Panel admin area
+    - API credentials from the Panel for this node
   </Accordion>
 </AccordionGroup>
 
-### Step 2: Deploy your changes
+<Warning>
+  Wings should be installed on a **separate server** from your Pterodactyl Panel for security and performance reasons. Installing both on the same server is not recommended for production use.
+</Warning>
+
+## Installation Steps
+
+<Steps>
+  <Step title="Install Docker">
+    If Docker is not already installed, install it using the official Docker installation script:
+
+    <CodeGroup>
+    ```bash Ubuntu/Debian
+    curl -fsSL https://get.docker.com | sh
+    systemctl enable --now docker
+    ```
+
+    ```bash CentOS/RHEL/Rocky
+    curl -fsSL https://get.docker.com | sh
+    systemctl enable --now docker
+    ```
+    </CodeGroup>
+
+    Verify Docker is running:
+    ```bash
+    docker --version
+    docker ps
+    ```
+
+    <Note>
+      The Docker installation script automatically handles repository setup and package installation for most distributions.
+    </Note>
+  </Step>
+
+  <Step title="Create Required Directories">
+    Wings uses specific directories for configuration and data storage. Create them with appropriate permissions:
+
+    ```bash
+    # Create configuration directory
+    mkdir -p /etc/pterodactyl
+
+    # Create data directories
+    mkdir -p /var/lib/pterodactyl/volumes
+    mkdir -p /var/lib/pterodactyl/backups
+    mkdir -p /var/lib/pterodactyl/archives
+
+    # Create log directory
+    mkdir -p /var/log/pterodactyl
+    ```
+
+    <Tip>
+      These are the default directories. You can customize them in the Wings configuration file if needed.
+    </Tip>
+  </Step>
+
+  <Step title="Download Wings Binary">
+    Download the latest Wings binary from the official GitHub releases:
+
+    ```bash
+    # Download the latest release
+    curl -L -o /usr/local/bin/wings "https://github.com/pterodactyl/wings/releases/latest/download/wings_linux_amd64"
+
+    # Make it executable
+    chmod +x /usr/local/bin/wings
+    ```
+
+    For ARM64 systems, use:
+    ```bash
+    curl -L -o /usr/local/bin/wings "https://github.com/pterodactyl/wings/releases/latest/download/wings_linux_arm64"
+    chmod +x /usr/local/bin/wings
+    ```
+
+    Verify the installation:
+    ```bash
+    wings version
+    ```
+
+    You should see output similar to:
+    ```
+    wings v1.12.1
+    Copyright © 2018 - 2026 Dane Everitt & Contributors
+    ```
+  </Step>
+
+  <Step title="Configure Wings via Panel">
+    Wings provides an automatic configuration command that fetches settings from your Panel:
+
+    <Note>
+      Before running this command, create a node in your Pterodactyl Panel admin area and obtain the auto-configuration command from the node's configuration tab.
+    </Note>
+
+    The command looks like this:
+    ```bash
+    wings configure --panel-url https://panel.example.com \
+      --token YOUR_API_TOKEN \
+      --node NODE_ID
+    ```
+
+    **Parameters explained:**
+    - `--panel-url` (`-p`): Your Panel's URL (must be accessible from Wings)
+    - `--token` (`-t`): API token from the Panel
+    - `--node` (`-n`): The numeric ID of the node
+
+    This command will:
+    1. Connect to your Panel via the API
+    2. Fetch the node configuration
+    3. Write the configuration to `/etc/pterodactyl/config.yml`
+
+    <CodeGroup>
+    ```bash Interactive Mode
+    # Run without arguments for interactive prompts
+    wings configure
+    # You'll be prompted for Panel URL, Token, and Node ID
+    ```
+
+    ```bash Command Line
+    # Provide all arguments directly
+    wings configure \
+      --panel-url https://panel.example.com \
+      --token ptlc_abc123xyz789 \
+      --node 1
+    ```
+
+    ```bash With Custom Config Path
+    # Specify a custom configuration file location
+    wings configure \
+      --config-path /custom/path/config.yml \
+      --panel-url https://panel.example.com \
+      --token ptlc_abc123xyz789 \
+      --node 1
+    ```
+    </CodeGroup>
+
+    <Warning>
+      If you need to reconfigure an existing Wings installation, use the `--override` flag to overwrite the existing configuration file.
+    </Warning>
+  </Step>
+
+  <Step title="Start Wings in Debug Mode (Optional)">
+    Before setting up Wings as a service, test that it works correctly:
+
+    ```bash
+    # Start Wings in debug mode
+    wings --debug
+    ```
+
+    You should see output similar to:
+    ```
+                      ____
+ __ Pterodactyl _____/___/_______ _______ ______
+ \_____\    \/\/    /   /       /  __   /   ___/
+    \___\          /   /   /   /  /_/  /___   /
+         \___/\___/___/___/___/___    /______/
+                             /_______/ v1.12.1
+
+    Copyright © 2018 - 2026 Dane Everitt & Contributors
+    ```
+
+    Wings will:
+    - Load the configuration from `/etc/pterodactyl/config.yml`
+    - Configure the Docker environment
+    - Start the HTTP API server (default port 8080)
+    - Start the SFTP server (default port 2022)
+    - Load and initialize any existing servers
+
+    <Tip>
+      Watch the logs to ensure there are no errors. Press `Ctrl+C` to stop Wings when you're ready to continue.
+    </Tip>
+  </Step>
+
+  <Step title="Create Systemd Service">
+    Create a systemd service file to manage Wings:
+
+    Create `/etc/systemd/system/wings.service`:
+    ```ini
+    [Unit]
+    Description=Pterodactyl Wings Daemon
+    After=docker.service
+    Requires=docker.service
+    PartOf=docker.service
+
+    [Service]
+    User=root
+    WorkingDirectory=/etc/pterodactyl
+    LimitNOFILE=4096
+    PIDFile=/var/run/wings/daemon.pid
+    ExecStart=/usr/local/bin/wings
+    Restart=on-failure
+    StartLimitInterval=180
+    StartLimitBurst=30
+    RestartSec=5s
+
+    [Install]
+    WantedBy=multi-user.target
+    ```
+
+    Enable and start the service:
+    ```bash
+    # Reload systemd to recognize the new service
+    systemctl daemon-reload
+
+    # Enable Wings to start on boot
+    systemctl enable wings
+
+    # Start Wings
+    systemctl start wings
+    ```
+
+    <Note>
+      Wings runs as root by default because it needs to interact with Docker and manage file permissions. The actual game servers run as the `pterodactyl` user inside containers.
+    </Note>
+  </Step>
+
+  <Step title="Verify Wings is Running">
+    Check that Wings is running correctly:
+
+    ```bash
+    # Check service status
+    systemctl status wings
+    ```
+
+    You should see:
+    ```
+    ● wings.service - Pterodactyl Wings Daemon
+       Loaded: loaded (/etc/systemd/system/wings.service; enabled)
+       Active: active (running) since ...
+    ```
+
+    View live logs:
+    ```bash
+    # Follow Wings logs in real-time
+    journalctl -u wings -f
+    ```
+
+    Check that Wings is listening on the correct ports:
+    ```bash
+    # Check API port (default 8080)
+    ss -tlnp | grep 8080
+
+    # Check SFTP port (default 2022)
+    ss -tlnp | grep 2022
+    ```
+  </Step>
+</Steps>
+
+## Configure Firewall
+
+Ensure your firewall allows traffic on the required ports:
+
+<CodeGroup>
+```bash UFW (Ubuntu/Debian)
+# Allow Wings API (from Panel)
+ufw allow 8080/tcp
+
+# Allow SFTP
+ufw allow 2022/tcp
+
+# Allow game server ports (example range)
+ufw allow 25565:25665/tcp
+ufw allow 25565:25665/udp
+```
+
+```bash FirewallD (CentOS/RHEL)
+# Allow Wings API
+firewall-cmd --permanent --add-port=8080/tcp
+
+# Allow SFTP
+firewall-cmd --permanent --add-port=2022/tcp
+
+# Allow game server ports
+firewall-cmd --permanent --add-port=25565-25665/tcp
+firewall-cmd --permanent --add-port=25565-25665/udp
+
+# Reload firewall
+firewall-cmd --reload
+```
+
+```bash iptables
+# Allow Wings API
+iptables -A INPUT -p tcp --dport 8080 -j ACCEPT
+
+# Allow SFTP
+iptables -A INPUT -p tcp --dport 2022 -j ACCEPT
+
+# Save rules (Ubuntu/Debian)
+netfilter-persistent save
+```
+</CodeGroup>
+
+<Warning>
+  The Wings API port (8080) should **only** be accessible from your Pterodactyl Panel server, not from the public internet. Configure your firewall accordingly.
+</Warning>
+
+## Create Your First Server
+
+With Wings running, you can now create servers from your Pterodactyl Panel:
+
+<Steps>
+  <Step title="Verify Node Connection">
+    In the Panel admin area, navigate to **Nodes** and check that your node shows as online with a green indicator.
+  </Step>
+
+  <Step title="Create a Server">
+    Go to **Servers** → **Create New Server** in the Panel and:
+    - Select your Wings node
+    - Choose an egg (game/application type)
+    - Allocate resources (CPU, memory, disk)
+    - Assign network allocations (IP and ports)
+  </Step>
+
+  <Step title="Install the Server">
+    The Panel will send installation instructions to Wings. Wings will:
+    - Create a Docker container for the server
+    - Run the installation script defined in the egg
+    - Download game files as needed
+    - Configure the server environment
+
+    Monitor the installation in real-time via the server console in the Panel.
+  </Step>
+
+  <Step title="Start the Server">
+    Once installation completes, start the server from the Panel. Wings will:
+    - Start the Docker container
+    - Execute the startup command
+    - Begin streaming console output
+    - Report resource usage back to the Panel
+  </Step>
+</Steps>
+
+## Common Commands
+
+Useful Wings commands for system administration:
+
+<CodeGroup>
+```bash Service Management
+# Start Wings
+systemctl start wings
+
+# Stop Wings
+systemctl stop wings
+
+# Restart Wings
+systemctl restart wings
+
+# View status
+systemctl status wings
+
+# Enable autostart
+systemctl enable wings
+
+# Disable autostart
+systemctl disable wings
+```
+
+```bash Log Management
+# View recent logs
+journalctl -u wings
+
+# Follow logs in real-time
+journalctl -u wings -f
+
+# View logs since last boot
+journalctl -u wings -b
+
+# View logs from last hour
+journalctl -u wings --since "1 hour ago"
+```
+
+```bash Wings Commands
+# Check version
+wings version
+
+# Run in foreground (debug)
+wings --debug
+
+# Reconfigure from Panel
+wings configure --override
+
+# Run diagnostics
+wings diagnostics
+
+# Use custom config file
+wings --config /custom/path/config.yml
+```
+</CodeGroup>
+
+## Troubleshooting
 
 <AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+  <Accordion title="Wings won't start">
+    Common causes:
+    - Docker is not running: `systemctl status docker`
+    - Configuration file is missing or invalid: Check `/etc/pterodactyl/config.yml`
+    - Port already in use: Check with `ss -tlnp | grep 8080`
+    - Permission issues: Ensure Wings has access to required directories
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+    Check logs for specific errors:
+    ```bash
+    journalctl -u wings -n 50
+    ```
+  </Accordion>
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
+  <Accordion title="Node shows offline in Panel">
+    Verify:
+    - Wings service is running: `systemctl status wings`
+    - API port (8080) is accessible from Panel server
+    - Panel URL in config matches your actual Panel URL
+    - Authentication token is correct in `/etc/pterodactyl/config.yml`
+    - Firewall rules allow Panel → Wings communication
+  </Accordion>
+
+  <Accordion title="Servers won't start">
+    Check:
+    - Docker containers: `docker ps -a`
+    - Server logs in Panel console
+    - Wings logs: `journalctl -u wings -f`
+    - Available system resources (memory, disk)
+    - Docker network configuration: `docker network ls`
+
+    Manually inspect container:
+    ```bash
+    docker logs <container-name>
+    docker inspect <container-name>
+    ```
+  </Accordion>
+
+  <Accordion title="SFTP connection fails">
+    Verify:
+    - SFTP server is running on port 2022: `ss -tlnp | grep 2022`
+    - Firewall allows port 2022
+    - Using correct credentials (Panel username and password)
+    - Server is not suspended
+    - SFTP is not disabled in config: Check `read_only` setting
+
+    Test SFTP connection:
+    ```bash
+    sftp -P 2022 username@your-wings-server
+    ```
   </Accordion>
 </AccordionGroup>
 
-### Step 3: Go live
+## Next Steps
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
+Now that Wings is running, explore these topics:
 
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Configuration" icon="gear" href="/configuration/config-file">
+    Customize Wings behavior and settings
+  </Card>
+  <Card title="SSL/TLS Setup" icon="lock" href="/configuration/ssl-tls">
+    Enable HTTPS with Let's Encrypt
+  </Card>
+  <Card title="Performance Tuning" icon="gauge-high" href="/troubleshooting/performance">
+    Optimize Wings for your workload
+  </Card>
+  <Card title="Backup Operations" icon="floppy-disk" href="/operations/backups">
+    Configure automated backups
+  </Card>
 </CardGroup>
 
+## Additional Resources
+
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+  For more detailed information, consult the following resources:
+  - [Official Wings Documentation](https://pterodactyl.io/wings/1.0/installing.html)
+  - [Community Guides](https://pterodactyl.io/community/about.html)
+  - [GitHub Issues](https://github.com/pterodactyl/panel/issues)
+  - [Discord Support](https://discord.gg/pterodactyl)
 </Note>

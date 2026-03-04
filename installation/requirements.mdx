@@ -1,0 +1,229 @@
+---
+title: Requirements
+description: System, hardware, and network requirements for running Pterodactyl Wings
+---
+
+Before installing Wings, ensure your system meets the following requirements. Wings is designed to run on modern Linux distributions with Docker support.
+
+## Operating System Requirements
+
+Wings supports the following Linux distributions:
+
+<CardGroup cols={2}>
+  <Card title="Supported Systems" icon="linux">
+    - Ubuntu 20.04+
+    - Debian 11+
+    - CentOS 8+ / Rocky Linux 8+
+    - Alpine Linux (with modifications)
+  </Card>
+  <Card title="Architecture" icon="microchip">
+    - x86_64 (amd64)
+    - ARM64 (aarch64)
+  </Card>
+</CardGroup>
+
+<Note>
+Wings is built with Go 1.24+ and requires a Linux kernel with Docker support. Alpine Linux users need to use the `adduser` command syntax (see config/config.go:530).
+</Note>
+
+## Docker Requirements
+
+Wings requires Docker to manage game server containers.
+
+### Docker Version
+
+- **Minimum**: Docker 20.10+
+- **Recommended**: Docker 24.0+
+- **Docker Compose**: Not required for Wings operation
+
+### Required Docker Features
+
+<AccordionGroup>
+  <Accordion title="Container Runtime">
+    Wings uses the Docker Engine API to create and manage containers. Ensure the Docker daemon is running and accessible.
+  </Accordion>
+  
+  <Accordion title="Network Support">
+    Wings creates a custom Docker network (default: `pterodactyl_nw`) using the bridge driver. The default configuration uses:
+    - IPv4: `172.18.0.0/16` with gateway `172.18.0.1`
+    - IPv6: `fdba:17c8:6c94::/64` with gateway `fdba:17c8:6c94::1011`
+  </Accordion>
+  
+  <Accordion title="Volume Mounts">
+    Wings mounts server data directories into containers. Ensure your filesystem supports bind mounts.
+  </Accordion>
+</AccordionGroup>
+
+## Hardware Requirements
+
+### Minimum Requirements
+
+| Component | Requirement |
+|-----------|-------------|
+| **CPU** | 1 core (2+ recommended) |
+| **RAM** | 1 GB (2 GB+ recommended) |
+| **Storage** | 10 GB free space |
+| **Network** | 100 Mbps |
+
+### Recommended Requirements
+
+| Component | Requirement |
+|-----------|-------------|
+| **CPU** | 4+ cores |
+| **RAM** | 4 GB+ (depends on hosted servers) |
+| **Storage** | SSD with 50 GB+ free space |
+| **Network** | 1 Gbps |
+
+<Warning>
+Memory requirements scale with the number of servers. Each game server requires its own memory allocation plus Wings overhead (default: 5-15% depending on server memory, see config/config_docker.go:154).
+</Warning>
+
+## Network Requirements
+
+### Required Ports
+
+Wings requires the following ports to be accessible:
+
+| Port | Protocol | Purpose |
+|------|----------|----------|
+| **8080** | TCP | Wings API (configurable) |
+| **2022** | TCP | SFTP server (configurable) |
+| **Dynamic** | TCP/UDP | Game server allocations |
+
+<Info>
+The Wings API port (default: 8080) must be accessible from the Panel server. The SFTP port (default: 2022) should be accessible to users who need file access.
+</Info>
+
+### Firewall Configuration
+
+Ensure your firewall allows:
+
+1. **Inbound connections** to Wings API port from Panel IP
+2. **Inbound connections** to SFTP port from user IPs
+3. **Inbound/outbound connections** on game server allocation ports
+4. **Outbound connections** for Docker image pulls
+
+<CodeGroup>
+```bash UFW (Ubuntu/Debian)
+# Allow Wings API
+sudo ufw allow 8080/tcp
+
+# Allow SFTP
+sudo ufw allow 2022/tcp
+
+# Allow game server ports (example range)
+sudo ufw allow 25565:25665/tcp
+sudo ufw allow 25565:25665/udp
+```
+
+```bash Firewalld (CentOS/Rocky)
+# Allow Wings API
+sudo firewall-cmd --permanent --add-port=8080/tcp
+
+# Allow SFTP
+sudo firewall-cmd --permanent --add-port=2022/tcp
+
+# Allow game server ports (example range)
+sudo firewall-cmd --permanent --add-port=25565-25665/tcp
+sudo firewall-cmd --permanent --add-port=25565-25665/udp
+
+# Reload firewall
+sudo firewall-cmd --reload
+```
+</CodeGroup>
+
+## System User Requirements
+
+Wings automatically creates a system user for managing server files:
+
+- **Default username**: `pterodactyl`
+- **Default UID/GID**: 988 (when running in Docker)
+- **Shell**: `/usr/sbin/nologin` or `/sbin/nologin`
+
+<Info>
+The user creation is handled automatically during Wings startup (see config/config.go:480). On Alpine Linux, the user is created with `adduser -S` instead of `useradd`.
+</Info>
+
+## Storage Requirements
+
+Wings uses several directories for operation:
+
+| Directory | Default Location | Purpose |
+|-----------|------------------|----------|
+| **Root** | `/var/lib/pterodactyl` | Base data directory |
+| **Servers** | `/var/lib/pterodactyl/volumes` | Server files |
+| **Backups** | `/var/lib/pterodactyl/backups` | Local backups |
+| **Archives** | `/var/lib/pterodactyl/archives` | Server transfers |
+| **Logs** | `/var/log/pterodactyl` | Wings logs |
+| **Temp** | `/tmp/pterodactyl` | Temporary files |
+
+<Warning>
+Ensure these directories are on a filesystem with adequate space. Server data can grow significantly depending on the games hosted.
+</Warning>
+
+## Optional Requirements
+
+### SSL/TLS Certificates
+
+For production environments, configure SSL/TLS:
+
+- **Self-signed certificates**: Suitable for testing
+- **Let's Encrypt**: Auto-TLS support built into Wings
+- **Custom certificates**: Manual SSL configuration
+
+### Log Rotation
+
+Wings automatically configures log rotation if `/etc/logrotate.d/` exists (see config/config.go:695). The default configuration:
+
+- Rotates logs at 10 MB
+- Compresses old logs
+- Keeps logs for 7 days
+
+### SELinux
+
+If using SELinux, ensure proper contexts for Wings directories, especially:
+
+- `/run/wings/etc` (passwd files)
+- `/run/wings/machine-id` (machine-id files)
+
+These directories are mounted into containers and require appropriate SELinux contexts.
+
+## Checking Your System
+
+Verify your system meets the requirements:
+
+<CodeGroup>
+```bash Check Docker
+# Check Docker version
+docker --version
+
+# Verify Docker is running
+sudo systemctl status docker
+
+# Test Docker functionality
+sudo docker run hello-world
+```
+
+```bash Check System Resources
+# Check available memory
+free -h
+
+# Check available disk space
+df -h
+
+# Check CPU cores
+nproc
+```
+
+```bash Check Network Connectivity
+# Check if ports are available
+sudo ss -tulpn | grep -E ':(8080|2022)'
+
+# Verify internet connectivity
+curl -I https://github.com
+```
+</CodeGroup>
+
+<Check>
+Once your system meets all requirements, proceed to [Installing Wings](/installation/installing).
+</Check>

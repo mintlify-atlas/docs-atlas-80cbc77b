@@ -1,0 +1,587 @@
+---
+title: Permissions & Isolation
+description: File permissions, user isolation, and container security in Wings
+---
+
+Wings implements multiple layers of security through filesystem permissions, user isolation, and container sandboxing. This page covers how Wings manages access control and security boundaries.
+
+## System User Configuration
+
+Wings creates and manages a dedicated system user for running server processes.
+
+### Pterodactyl User
+
+By default, Wings uses the `pterodactyl` user:
+
+```yaml
+# config.yml
+system:
+  username: pterodactyl
+```
+
+Configuration structure:
+
+```go
+// config/config.go:145-174
+type SystemConfiguration struct {
+    Username string `default:"pterodactyl" yaml:"username"`
+
+    User struct {
+        Rootless struct {
+            Enabled      bool `yaml:"enabled" default:"false"`
+            ContainerUID int  `yaml:"container_uid" default:"0"`
+            ContainerGID int  `yaml:"container_gid" default:"0"`
+        } `yaml:"rootless"`
+
+        Uid int `yaml:"uid"`
+        Gid int `yaml:"gid"`
+    } `yaml:"user"`
+}
+```
+
+### Automatic User Creation
+
+Wings automatically creates the pterodactyl user on startup:
+
+```go
+// config/config.go:487-549
+func EnsurePterodactylUser() error {
+    log.WithField("username", _config.System.Username).Info("checking for pterodactyl system user")
+    u, err := user.Lookup(_config.System.Username)
+    if err != nil {
+        if _, ok := err.(user.UnknownUserError); !ok {
+            return err
+        }
+    } else {
+        _config.System.User.Uid = system.MustInt(u.Uid)
+        _config.System.User.Gid = system.MustInt(u.Gid)
+        return nil
+    }
+
+    command := fmt.Sprintf("useradd --system --no-create-home --shell /usr/sbin/nologin %s", _config.System.Username)
+    
+    // Alpine Linux compatibility
+    if strings.HasPrefix(sysName, "alpine") {
+        command = fmt.Sprintf("adduser -S -D -H -G %[1]s -s /sbin/nologin %[1]s", _config.System.Username)
+        if _, err := exec.Command("addgroup", "-S", _config.System.Username).Output(); err != nil {
+            return err
+        }
+    }
+
+    split := strings.Split(command, " ")
+    if _, err := exec.Command(split[0], split[1:]...).Output(); err != nil {
+        return err
+    }
+    
+    u, err = user.Lookup(_config.System.Username)
+    if err != nil {
+        return err
+    }
+    _config.System.User.Uid = system.MustInt(u.Uid)
+    _config.System.User.Gid = system.MustInt(u.Gid)
+    return nil
+}
+```
+
+**User Properties:**
+
+- **System account**: `--system` flag
+- **No home directory**: Prevents login
+- **No shell**: `/usr/sbin/nologin` for security
+- **Dedicated group**: Same name as user
+
+### Manual User Configuration
+
+You can use an existing user:
+
+```yaml
+system:
+  username: myuser
+  user:
+    uid: 1001
+    gid: 1001
+```
+
+## Filesystem Permissions
+
+Wings automatically manages file ownership and permissions for server files.
+
+### Directory Structure
+
+Wings creates directories with restricted permissions:
+
+```go
+// config/config.go:629-686
+func ConfigureDirectories() error {
+    root := _config.System.RootDirectory
+    if err := os.MkdirAll(root, 0o700); err != nil {
+        return err
+    }
+
+    if err := os.MkdirAll(_config.System.Data, 0o700); err != nil {
+        return err
+    }
+
+    if err := os.MkdirAll(_config.System.ArchiveDirectory, 0o700); err != nil {
+        return err
+    }
+
+    if err := os.MkdirAll(_config.System.BackupDirectory, 0o700); err != nil {
+        return err
+    }
+
+    return nil
+}
+```
+
+**Default Directories:**
+
+- `/var/lib/pterodactyl` (0700) - Root directory
+- `/var/lib/pterodactyl/volumes` (0700) - Server data
+- `/var/lib/pterodactyl/archives` (0700) - Server transfers
+- `/var/lib/pterodactyl/backups` (0700) - Local backups
+- `/tmp/pterodactyl` (0700) - Temporary files
+
+### Automatic Chown
+
+Wings automatically sets correct ownership on files:
+
+```go
+// server/filesystem/filesystem.go:133-136
+func (fs *Filesystem) chownFile(name string) error {
+    uid := config.Get().System.User.Uid
+    gid := config.Get().System.User.Gid
+    return fs.unixFS.Lchown(name, uid, gid)
+}
+```
+
+Recursive chown for directories:
+
+```go
+// server/filesystem/filesystem.go (Chown method)
+func (fs *Filesystem) Chown(p string) error {
+    uid := config.Get().System.User.Uid
+    gid := config.Get().System.User.Gid
+
+    // Chown the initial path
+    if err := fs.unixFS.Lchownat(dirfd, name, uid, gid); err != nil {
+        return errors.Wrap(err, "server/filesystem: chown: failed to chown path")
+    }
+
+    // Walk and chown all files
+    return walkFn()
+}
+```
+
+### SFTP File Operations
+
+SFTP operations automatically set ownership:
+
+```go
+// sftp/handler.go:124-137
+func (h *Handler) Filewrite(request *sftp.Request) (io.WriterAt, error) {
+    f, err := h.fs.Touch(request.Filepath, os.O_RDWR|os.O_TRUNC)
+    if err != nil {
+        return nil, sftp.ErrSSHFxFailure
+    }
+    
+    // Chown may or may not have been called in touch, so always do it
+    _ = h.fs.Chown(request.Filepath)
+    
+    return f, nil
+}
+```
+
+See `sftp/handler.go:139-257` for all SFTP operations.
+
+### Permission Checking
+
+Wings can verify permissions on boot:
+
+```yaml
+system:
+  check_permissions_on_boot: true  # Default
+```
+
+Configuration:
+
+```go
+// config/config.go:238
+CheckPermissionsOnBoot bool `default:"true" yaml:"check_permissions_on_boot"`
+```
+
+<Warning>
+Disabling permission checks improves boot performance but may cause permission issues if files are modified externally.
+</Warning>
+
+### File Mode Defaults
+
+- **Files**: 0644 (rw-r--r--)
+- **Directories**: 0755 (rwxr-xr-x)
+- **SFTP forced directory mode**: 0755
+
+From `sftp/handler.go:163-166`:
+
+```go
+mode := request.Attributes().FileMode().Perm()
+if request.Attributes().FileMode().IsDir() {
+    mode = 0o755  // Force directories to 0755
+}
+```
+
+## Container Isolation
+
+Wings runs each server in an isolated Docker container with security restrictions.
+
+### Container User Mapping
+
+Containers run as the pterodactyl user:
+
+```go
+// environment/docker/container.go:190-195
+if cfg.System.User.Rootless.Enabled {
+    conf.User = fmt.Sprintf("%d:%d", cfg.System.User.Rootless.ContainerUID, cfg.System.User.Rootless.ContainerGID)
+} else {
+    conf.User = strconv.Itoa(cfg.System.User.Uid) + ":" + strconv.Itoa(cfg.System.User.Gid)
+}
+```
+
+**Standard Mode:**
+- Container runs as `pterodactyl` user (typically UID 988)
+- Files are owned by `pterodactyl` on host
+- Processes inside container run as same UID
+
+**Rootless Mode:**
+- Container runs as current user
+- No privileged operations required
+- Better security isolation
+
+### User Namespace Remapping
+
+Wings supports Docker user namespace remapping:
+
+```yaml
+docker:
+  userns_mode: ""  # Use daemon default
+  # userns_mode: "host"  # Disable remapping for Wings
+```
+
+Configuration:
+
+```go
+// config/config_docker.go:83-89
+// Sets the user namespace mode for the container when user namespace remapping
+// option is enabled. If the value is blank, the daemon's user namespace remapping
+// configuration is used. If the value is "host", then the pterodactyl containers
+// are started with user namespace remapping disabled.
+UsernsMode string `default:"" json:"userns_mode" yaml:"userns_mode"`
+```
+
+### Container Security Options
+
+#### Process Limits
+
+Prevent fork bombs:
+
+```yaml
+docker:
+  container_pid_limit: 512  # Default
+```
+
+```go
+// config/config_docker.go:62-66
+// ContainerPidLimit sets the total number of processes that can be active in
+// a container at any given moment. This is a security concern in shared-hosting
+// environments where a malicious process could create enough processes to cause
+// the host node to run out of available pids and crash.
+ContainerPidLimit int64 `default:"512" json:"container_pid_limit" yaml:"container_pid_limit"`
+```
+
+#### Network Isolation
+
+Each container gets an isolated network:
+
+```yaml
+docker:
+  network:
+    name: pterodactyl_nw
+    enable_icc: true  # Inter-container communication
+    is_internal: false
+```
+
+#### Tmpfs Size Limits
+
+```yaml
+docker:
+  tmpfs_size: 100  # MB
+```
+
+```go
+// config/config_docker.go:57-60
+// TmpfsSize specifies the size for the /tmp directory mounted into containers.
+// Docker utilizes the host's system memory for this value.
+TmpfsSize uint `default:"100" json:"tmpfs_size" yaml:"tmpfs_size"`
+```
+
+### Rootless Mode
+
+Run Wings without root privileges:
+
+```yaml
+system:
+  user:
+    rootless:
+      enabled: true
+      container_uid: 0  # Run as root inside container
+      container_gid: 0
+```
+
+**Benefits:**
+
+- Wings runs as non-root user
+- Better security isolation
+- Reduced attack surface
+
+**Requirements:**
+
+- Docker configured for rootless mode
+- Proper UID/GID mapping
+- No privileged operations
+
+See `config/config.go:501-511` for rootless user handling.
+
+## SFTP Permissions
+
+SFTP access is controlled through Panel-issued permissions.
+
+### Permission Model
+
+```go
+// sftp/handler.go:20-26
+const (
+    PermissionFileRead        = "file.read"
+    PermissionFileReadContent = "file.read-content"
+    PermissionFileCreate      = "file.create"
+    PermissionFileUpdate      = "file.update"
+    PermissionFileDelete      = "file.delete"
+)
+```
+
+### Permission Checking
+
+```go
+// sftp/handler.go:289-303
+func (h *Handler) can(permission string) bool {
+    if h.server.IsSuspended() {
+        return false
+    }
+    for _, p := range h.permissions {
+        // Match specific permission or wildcard
+        if p == permission || p == "*" {
+            return true
+        }
+    }
+    return false
+}
+```
+
+### Read-Only Mode
+
+Force all SFTP connections to read-only:
+
+```yaml
+system:
+  sftp:
+    read_only: true
+```
+
+Implementation in `sftp/handler.go:94-96`:
+
+```go
+func (h *Handler) Filewrite(request *sftp.Request) (io.WriterAt, error) {
+    if h.ro {
+        return nil, sftp.ErrSSHFxOpUnsupported
+    }
+    // ...
+}
+```
+
+### SFTP Permission Examples
+
+**Read Files:**
+```go
+PermissionFileRead        // List files
+PermissionFileReadContent // Read file contents
+```
+
+**Modify Files:**
+```go
+PermissionFileCreate // Create new files/directories
+PermissionFileUpdate // Modify existing files, chmod, rename
+PermissionFileDelete // Delete files/directories
+```
+
+**Admin Access:**
+```go
+"*" // All permissions
+```
+
+## Container Passwd Files
+
+Wings can generate custom passwd/group files for containers:
+
+```yaml
+system:
+  passwd:
+    enabled: false  # Default
+    directory: /run/wings/etc
+```
+
+Generated files:
+
+```go
+// config/config.go:553-581
+func ConfigurePasswd() error {
+    // Generate /etc/group
+    v := []byte(fmt.Sprintf(
+        `root:x:0:
+container:x:%d:
+nogroup:x:65534:`,
+        _config.System.User.Gid,
+    ))
+    if err := os.WriteFile(filepath.Join(passwd.Directory, "group"), v, 0o644); err != nil {
+        return err
+    }
+
+    // Generate /etc/passwd
+    v = []byte(fmt.Sprintf(
+        `root:x:0:0::/root:/bin/sh
+container:x:%d:%d::/home/container:/bin/sh
+nobody:x:65534:65534::/var/empty:/bin/sh
+`,
+        _config.System.User.Uid,
+        _config.System.User.Gid,
+    ))
+    if err := os.WriteFile(filepath.Join(passwd.Directory, "passwd"), v, 0o644); err != nil {
+        return err
+    }
+    return nil
+}
+```
+
+<Note>
+This is useful for applications that require specific passwd entries but should be used carefully as it's mounted into all containers.
+</Note>
+
+## Security Best Practices
+
+### System User Security
+
+1. **Never use root**: Always run Wings as a dedicated user
+2. **No login shell**: Use `/usr/sbin/nologin` or `/bin/false`
+3. **System account**: Use `--system` flag when creating users
+4. **Minimal permissions**: Restrict UID/GID access to server files only
+
+### File Permission Hardening
+
+1. **Restrict root directory**:
+```bash
+sudo chmod 700 /var/lib/pterodactyl
+sudo chown pterodactyl:pterodactyl /var/lib/pterodactyl
+```
+
+2. **Verify ownership**:
+```bash
+find /var/lib/pterodactyl/volumes -type f ! -user pterodactyl
+```
+
+3. **Enable boot checks**:
+```yaml
+system:
+  check_permissions_on_boot: true
+```
+
+### Container Isolation
+
+1. **Enable PID limits**:
+```yaml
+docker:
+  container_pid_limit: 512
+```
+
+2. **Restrict network access**:
+```yaml
+docker:
+  network:
+    enable_icc: false  # Disable inter-container communication
+```
+
+3. **Consider rootless mode** for enhanced security
+
+4. **Use user namespace remapping** in Docker daemon
+
+### SFTP Hardening
+
+1. **Enable read-only when appropriate**:
+```yaml
+system:
+  sftp:
+    read_only: true
+```
+
+2. **Use key-based authentication** instead of passwords
+
+3. **Limit SFTP permissions** in Panel to minimum required
+
+4. **Monitor SFTP access** via server activity logs
+
+### Directory Isolation
+
+Wings uses path validation to prevent directory traversal:
+
+- All file operations validate against server root
+- Symlinks are restricted to server directory
+- No access to host filesystem outside server root
+
+See `server/filesystem/` for path safety implementations.
+
+## Troubleshooting
+
+### Permission Denied Errors
+
+**Check file ownership:**
+```bash
+ls -la /var/lib/pterodactyl/volumes/server-uuid/
+```
+
+**Fix ownership:**
+```bash
+sudo chown -R pterodactyl:pterodactyl /var/lib/pterodactyl/volumes/server-uuid/
+```
+
+### Container User Mismatch
+
+**Verify Wings configuration:**
+```bash
+grep -A 5 "user:" /etc/pterodactyl/config.yml
+```
+
+**Check system user:**
+```bash
+id pterodactyl
+```
+
+### SFTP Access Denied
+
+**Check server suspension:**
+- Suspended servers deny all SFTP access
+
+**Verify permissions in Panel:**
+- User must have appropriate file permissions
+
+**Check read-only mode:**
+```yaml
+system:
+  sftp:
+    read_only: false  # Allow writes
+```

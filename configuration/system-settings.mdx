@@ -1,0 +1,328 @@
+---
+title: System Settings
+description: Configure Wings system directories, user settings, and operational parameters
+---
+
+## Directory Configuration
+
+Wings uses several directories for storing data, logs, and temporary files. All directories are created automatically on startup with appropriate permissions.
+
+### Root Directory
+
+```yaml
+system:
+  root_directory: /var/lib/pterodactyl
+```
+
+**Default:** `/var/lib/pterodactyl`
+
+The base directory where Wings stores its internal data, including server states and the TLS cache for auto-TLS.
+
+### Data Directory
+
+```yaml
+system:
+  data: /var/lib/pterodactyl/volumes
+```
+
+**Default:** `/var/lib/pterodactyl/volumes`
+
+Directory where server data and files are stored. Each server gets its own subdirectory within this path.
+
+<Warning>
+If this path is a symlink, Wings will automatically resolve it to the final destination to ensure path validation works correctly.
+</Warning>
+
+### Log Directory
+
+```yaml
+system:
+  log_directory: /var/log/pterodactyl
+```
+
+**Default:** `/var/log/pterodactyl`
+
+Directory where Wings logs and server installation logs are stored.
+
+### Archive Directory
+
+```yaml
+system:
+  archive_directory: /var/lib/pterodactyl/archives
+```
+
+**Default:** `/var/lib/pterodactyl/archives`
+
+Directory where server archives for transfers are temporarily stored.
+
+### Backup Directory
+
+```yaml
+system:
+  backup_directory: /var/lib/pterodactyl/backups
+```
+
+**Default:** `/var/lib/pterodactyl/backups`
+
+Directory where local backups are stored before being uploaded to remote storage.
+
+### Temporary Directory
+
+```yaml
+system:
+  tmp_directory: /tmp/pterodactyl
+```
+
+**Default:** `/tmp/pterodactyl`
+
+Temporary directory for installation processes and other temporary operations. Useful for docker-in-docker environments.
+
+## User Configuration
+
+### System Username
+
+```yaml
+system:
+  username: pterodactyl
+```
+
+**Default:** `pterodactyl`
+
+The system user that owns all server files and runs within containers. This user is automatically created on first startup if it doesn't exist.
+
+### User IDs
+
+```yaml
+system:
+  user:
+    uid: 988
+    gid: 988
+```
+
+These values are automatically detected based on the system username. You generally don't need to set them manually unless using Wings in a container environment.
+
+**Environment Variables (Docker):**
+- `WINGS_UID` - Override user ID
+- `WINGS_GID` - Override group ID
+- `WINGS_USERNAME` - Override username
+
+### Rootless Mode
+
+```yaml
+system:
+  user:
+    rootless:
+      enabled: false
+      container_uid: 0
+      container_gid: 0
+```
+
+**Defaults:**
+- `enabled`: `false`
+- `container_uid`: `0`
+- `container_gid`: `0`
+
+Enables rootless container mode where containers run as the user running Wings rather than a dedicated pterodactyl user.
+
+## Timezone
+
+```yaml
+system:
+  timezone: UTC
+```
+
+**Default:** Auto-detected (falls back to `UTC`)
+
+Timezone passed into all containers. Wings attempts to detect this automatically from:
+
+1. `TZ` environment variable
+2. `/etc/timezone` file
+3. `timedatectl` command output
+
+You can manually override this if needed.
+
+## Performance Settings
+
+### Disk Check Interval
+
+```yaml
+system:
+  disk_check_interval: 150
+```
+
+**Default:** `150` seconds
+
+Time in seconds before a server's disk space calculation is considered stale and rechecked.
+
+<Warning>
+Setting this value too low can seriously impact system performance and cause high I/O and CPU usage.
+</Warning>
+
+Set to `0` to disable disk checking entirely (always returns 0 for disk usage).
+
+### Activity Logging
+
+```yaml
+system:
+  activity_send_interval: 60
+  activity_send_count: 100
+```
+
+**Defaults:**
+- `activity_send_interval`: `60` seconds
+- `activity_send_count`: `100` events
+
+Controls how often activity logs are sent to the Panel and how many events to send per batch.
+
+### Websocket Log Count
+
+```yaml
+system:
+  websocket_log_count: 150
+```
+
+**Default:** `150` lines
+
+Number of console log lines sent when a server connects to the websocket.
+
+## File System Options
+
+### Check Permissions on Boot
+
+```yaml
+system:
+  check_permissions_on_boot: true
+```
+
+**Default:** `true`
+
+Whether to check and fix file permissions when a server boots. Disabling this can speed up boot times for servers with many files.
+
+### OpenAT Mode
+
+```yaml
+system:
+  openat_mode: auto
+```
+
+**Default:** `auto`
+
+**Options:** `auto`, `openat`, `openat2`
+
+Controls which system call to use for file operations. `auto` detects support automatically.
+
+## Container File System Features
+
+### Passwd File Generation
+
+```yaml
+system:
+  passwd:
+    enabled: false
+    directory: /run/wings/etc
+```
+
+**Defaults:**
+- `enabled`: `false`
+- `directory`: `/run/wings/etc`
+
+Enables mounting of generated passwd/group files into containers. Useful for ensuring consistent user mappings.
+
+<Note>
+When running Wings in a container, the passwd directory must be mounted at the exact same path on the host.
+</Note>
+
+### Machine ID Generation
+
+```yaml
+system:
+  machine_id:
+    enabled: true
+    directory: /run/wings/machine-id
+```
+
+**Defaults:**
+- `enabled`: `true`
+- `directory`: `/run/wings/machine-id`
+
+Controls generation and mounting of `/etc/machine-id` files into containers.
+
+## Backup Configuration
+
+```yaml
+system:
+  backups:
+    write_limit: 0
+    compression_level: best_speed
+```
+
+**Defaults:**
+- `write_limit`: `0` (unlimited)
+- `compression_level`: `best_speed`
+
+### Write Limit
+
+Disk I/O write limit for backups in MiB/s. Set to `0` for unlimited, or a positive value to throttle.
+
+### Compression Level
+
+**Options:**
+- `none` - No compression
+- `best_speed` - Gzip level 1 (fast, less compression)
+- `best_compression` - Gzip level 9 (slow, maximum compression)
+
+## Transfer Configuration
+
+```yaml
+system:
+  transfers:
+    download_limit: 0
+```
+
+**Default:** `0` (unlimited)
+
+Network I/O read limit when downloading transfer archives in MiB/s.
+
+## Crash Detection
+
+```yaml
+system:
+  crash_detection:
+    enabled: true
+    detect_clean_exit_as_crash: true
+    timeout: 60
+```
+
+**Defaults:**
+- `enabled`: `true`
+- `detect_clean_exit_as_crash`: `true`
+- `timeout`: `60` seconds
+
+Controls automatic crash detection and restart functionality.
+
+- **`enabled`** - Global crash detection toggle
+- **`detect_clean_exit_as_crash`** - Detect clean exits (exit code 0) as crashes if not initiated by Wings
+- **`timeout`** - Seconds between crashes before automatic restart is disabled (prevents boot loops)
+
+## Log Rotation
+
+```yaml
+system:
+  enable_log_rotate: true
+```
+
+**Default:** `true`
+
+Whether Wings should create a logrotate configuration file for automatic log rotation.
+
+## SFTP Configuration
+
+SFTP settings are nested under the system configuration. See the [SFTP Settings](/configuration/sftp-settings) page for details.
+
+```yaml
+system:
+  sftp:
+    bind_address: 0.0.0.0
+    bind_port: 2022
+    read_only: false
+```

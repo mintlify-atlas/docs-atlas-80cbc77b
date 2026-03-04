@@ -1,0 +1,600 @@
+---
+title: Configuration
+description: Configure Wings with all available settings and options
+---
+
+Wings uses a YAML configuration file located at `/etc/pterodactyl/config.yml` by default. This guide covers all configuration options based on the actual source code.
+
+## Auto-Configuration (Recommended)
+
+The easiest way to configure Wings is using the automatic configuration command:
+
+```bash
+sudo wings configure --panel-url https://panel.example.com --token YOUR_API_TOKEN --node 1
+```
+
+<Info>
+This command fetches the configuration from your Panel and automatically creates the config file (see cmd/configure.go:48).
+</Info>
+
+### Auto-Configure Options
+
+| Flag | Description |
+|------|-------------|
+| `--panel-url` | Panel URL (e.g., `https://panel.example.com`) |
+| `--token` | Panel API token |
+| `--node` | Node ID from the Panel |
+| `--config-path` | Config file location (default: `/etc/pterodactyl/config.yml`) |
+| `--override` | Override existing configuration |
+| `--allow-insecure` | Skip SSL certificate verification |
+
+<Warning>
+Use `--allow-insecure` only for testing with self-signed certificates.
+</Warning>
+
+## Manual Configuration
+
+For manual configuration or customization, create `/etc/pterodactyl/config.yml`.
+
+### Basic Configuration Structure
+
+```yaml /etc/pterodactyl/config.yml
+# Panel connection settings
+remote: 'https://panel.example.com'
+token_id: 'your-token-id'
+token: 'your-token'
+
+# Application settings
+app_name: 'Pterodactyl'
+debug: false
+
+# API configuration
+api:
+  host: 0.0.0.0
+  port: 8080
+  ssl:
+    enabled: false
+    cert: /etc/letsencrypt/live/example.com/fullchain.pem
+    key: /etc/letsencrypt/live/example.com/privkey.pem
+  upload_limit: 100
+
+# System configuration
+system:
+  root_directory: /var/lib/pterodactyl
+  log_directory: /var/log/pterodactyl
+  data: /var/lib/pterodactyl/volumes
+  archive_directory: /var/lib/pterodactyl/archives
+  backup_directory: /var/lib/pterodactyl/backups
+  tmp_directory: /tmp/pterodactyl
+  username: pterodactyl
+  timezone: UTC
+  
+  # SFTP configuration
+  sftp:
+    bind_address: 0.0.0.0
+    bind_port: 2022
+    read_only: false
+
+# Docker configuration
+docker:
+  network:
+    interface: 172.18.0.1
+    name: pterodactyl_nw
+    network_mode: pterodactyl_nw
+    driver: bridge
+  tmpfs_size: 100
+  container_pid_limit: 512
+```
+
+## Configuration Reference
+
+### Panel Connection
+
+Settings for connecting Wings to your Panel.
+
+<ParamField path="remote" type="string" required>
+  Panel URL (e.g., `https://panel.example.com`)
+</ParamField>
+
+<ParamField path="token_id" type="string" required>
+  Token ID from Panel node configuration
+</ParamField>
+
+<ParamField path="token" type="string" required>
+  Authentication token from Panel node configuration
+</ParamField>
+
+<ParamField path="remote_query.timeout" type="integer" default="30">
+  API request timeout in seconds (see config/config.go:110)
+</ParamField>
+
+<ParamField path="remote_query.boot_servers_per_page" type="integer" default="50">
+  Number of servers to load per API request (see config/config.go:121)
+</ParamField>
+
+### API Configuration
+
+Configure the Wings API server.
+
+<ParamField path="api.host" type="string" default="0.0.0.0">
+  Interface to bind the API server to
+</ParamField>
+
+<ParamField path="api.port" type="integer" default="8080">
+  Port for the API server
+</ParamField>
+
+<ParamField path="api.ssl.enabled" type="boolean" default="false">
+  Enable SSL/TLS for the API
+</ParamField>
+
+<ParamField path="api.ssl.cert" type="string">
+  Path to SSL certificate file
+</ParamField>
+
+<ParamField path="api.ssl.key" type="string">
+  Path to SSL private key file
+</ParamField>
+
+<ParamField path="api.upload_limit" type="integer" default="100">
+  Maximum file upload size in MB (see config/config.go:96)
+</ParamField>
+
+<ParamField path="api.trusted_proxies" type="array">
+  List of trusted proxy IPs for X-Forwarded-For headers
+  
+  ```yaml
+  api:
+    trusted_proxies:
+      - 127.0.0.1
+      - 172.18.0.0/16
+  ```
+</ParamField>
+
+### System Configuration
+
+Core system settings for Wings operation.
+
+<ParamField path="system.root_directory" type="string" default="/var/lib/pterodactyl">
+  Root data directory for all Pterodactyl data
+</ParamField>
+
+<ParamField path="system.data" type="string" default="/var/lib/pterodactyl/volumes">
+  Directory for server files
+</ParamField>
+
+<ParamField path="system.archive_directory" type="string" default="/var/lib/pterodactyl/archives">
+  Directory for server transfer archives
+</ParamField>
+
+<ParamField path="system.backup_directory" type="string" default="/var/lib/pterodactyl/backups">
+  Directory for local backups
+</ParamField>
+
+<ParamField path="system.log_directory" type="string" default="/var/log/pterodactyl">
+  Directory for Wings logs
+</ParamField>
+
+<ParamField path="system.tmp_directory" type="string" default="/tmp/pterodactyl">
+  Temporary directory for installations (see config/config.go:143)
+</ParamField>
+
+<ParamField path="system.username" type="string" default="pterodactyl">
+  System user for server files (see config/config.go:146)
+</ParamField>
+
+<ParamField path="system.timezone" type="string" default="auto-detected">
+  Timezone for containers (auto-detected or manually set)
+</ParamField>
+
+<ParamField path="system.disk_check_interval" type="integer" default="150">
+  Seconds between disk usage checks. Set to 0 to disable (see config/config.go:223)
+  
+  <Warning>
+  Setting this too low can cause performance issues
+  </Warning>
+</ParamField>
+
+<ParamField path="system.check_permissions_on_boot" type="boolean" default="true">
+  Check file permissions when starting servers (see config/config.go:238)
+</ParamField>
+
+<ParamField path="system.enable_log_rotate" type="boolean" default="true">
+  Enable automatic log rotation configuration (see config/config.go:242)
+</ParamField>
+
+### SFTP Configuration
+
+Configure the built-in SFTP server.
+
+<ParamField path="system.sftp.bind_address" type="string" default="0.0.0.0">
+  Interface to bind SFTP server to (see config/config.go:67)
+</ParamField>
+
+<ParamField path="system.sftp.bind_port" type="integer" default="2022">
+  Port for SFTP server (see config/config.go:69)
+</ParamField>
+
+<ParamField path="system.sftp.read_only" type="boolean" default="false">
+  Disable write operations on SFTP (see config/config.go:71)
+</ParamField>
+
+### Docker Configuration
+
+Configure Docker integration.
+
+#### Network Settings
+
+```yaml
+docker:
+  network:
+    # Network interface IP
+    interface: 172.18.0.1
+    
+    # Network name
+    name: pterodactyl_nw
+    
+    # Docker network driver
+    driver: bridge
+    
+    # Network mode for containers
+    network_mode: pterodactyl_nw
+    
+    # Internal network (no internet access)
+    is_internal: false
+    
+    # Enable inter-container communication
+    enable_icc: true
+    
+    # Network MTU
+    network_mtu: 1500
+    
+    # DNS servers for containers
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
+    
+    # Network interfaces
+    interfaces:
+      v4:
+        subnet: 172.18.0.0/16
+        gateway: 172.18.0.1
+      v6:
+        subnet: fdba:17c8:6c94::/64
+        gateway: fdba:17c8:6c94::1011
+```
+
+<Note>
+Network configuration is defined in config/config_docker.go:12-42.
+</Note>
+
+#### Container Settings
+
+<ParamField path="docker.tmpfs_size" type="integer" default="100">
+  Size of /tmp directory in containers (MB) (see config/config.go:60)
+</ParamField>
+
+<ParamField path="docker.container_pid_limit" type="integer" default="512">
+  Maximum processes per container (see config/config.go:66)
+</ParamField>
+
+<ParamField path="docker.installer_limits.memory" type="integer" default="1024">
+  Memory limit for installer containers (MB) (see config/config.go:73)
+</ParamField>
+
+<ParamField path="docker.installer_limits.cpu" type="integer" default="100">
+  CPU limit for installer containers (%) (see config/config.go:74)
+</ParamField>
+
+#### Memory Overhead
+
+Configure memory overhead for containers to prevent OOM errors:
+
+```yaml
+docker:
+  overhead:
+    # Override default multipliers
+    override: false
+    
+    # Default multiplier (5%)
+    default_multiplier: 1.05
+    
+    # Memory-based multipliers
+    multipliers:
+      2048: 1.15  # 15% for <= 2GB
+      4096: 1.10  # 10% for <= 4GB
+```
+
+<Info>
+Default overhead (when override is false): 15% for ≤2GB, 10% for ≤4GB, 5% otherwise (see config/config_docker.go:154).
+</Info>
+
+#### Docker Registry Authentication
+
+Authenticate with private Docker registries:
+
+```yaml
+docker:
+  registries:
+    ghcr.io:
+      username: your-username
+      password: your-token
+    registry.example.com:
+      username: user
+      password: pass
+```
+
+### Advanced System Settings
+
+#### Rootless Mode
+
+```yaml
+system:
+  user:
+    rootless:
+      enabled: false
+      container_uid: 0
+      container_gid: 0
+```
+
+<Warning>
+Rootless mode is experimental. Enable only if you understand the implications (see config/config.go:159).
+</Warning>
+
+#### Passwd File Generation
+
+```yaml
+system:
+  passwd:
+    enabled: false
+    directory: /run/wings/etc
+```
+
+Generates `/etc/passwd` and `/etc/group` files for containers (see config/config.go:177).
+
+#### Machine ID
+
+```yaml
+system:
+  machine_id:
+    enabled: true
+    directory: /run/wings/machine-id
+```
+
+Mounts generated `/etc/machine-id` files (see config/config.go:196).
+
+### Crash Detection
+
+```yaml
+system:
+  crash_detection:
+    enabled: true
+    detect_clean_exit_as_crash: true
+    timeout: 60
+```
+
+<ParamField path="system.crash_detection.enabled" type="boolean" default="true">
+  Enable crash detection globally (see config/config.go:260)
+</ParamField>
+
+<ParamField path="system.crash_detection.detect_clean_exit_as_crash" type="boolean" default="true">
+  Detect clean exits as crashes if unexpected (see config/config.go:265)
+</ParamField>
+
+<ParamField path="system.crash_detection.timeout" type="integer" default="60">
+  Seconds between crashes before auto-restart stops (see config/config.go:270)
+</ParamField>
+
+### Backup Configuration
+
+```yaml
+system:
+  backups:
+    # Write speed limit in MiB/s (0 = unlimited)
+    write_limit: 0
+    
+    # Compression level: none, best_speed, best_compression
+    compression_level: best_speed
+```
+
+<Note>
+Backup settings are defined in config/config.go:273-292.
+</Note>
+
+### Transfer Configuration
+
+```yaml
+system:
+  transfers:
+    # Download speed limit in MiB/s (0 = unlimited)
+    download_limit: 0
+```
+
+### Console Throttling
+
+```yaml
+throttles:
+  enabled: true
+  lines: 2000
+  line_reset_interval: 100
+```
+
+Prevents console spam (see config/config.go:304).
+
+## Environment Variables
+
+Wings supports environment variable expansion in configuration:
+
+### Token from Environment
+
+```yaml
+token_id: '${WINGS_TOKEN_ID}'
+token: '${WINGS_TOKEN}'
+```
+
+### Token from File
+
+```yaml
+token_id: 'file:///etc/pterodactyl/token_id'
+token: 'file:///etc/pterodactyl/token'
+```
+
+### Systemd Credentials
+
+```yaml
+token_id: 'file://${CREDENTIALS_DIRECTORY}/token_id'
+token: 'file://${CREDENTIALS_DIRECTORY}/token'
+```
+
+<Info>
+Environment expansion is handled in config/config.go:844. The `file://` prefix reads tokens from files.
+</Info>
+
+## Example Configurations
+
+<Tabs>
+  <Tab title="Basic">
+    ```yaml
+    remote: 'https://panel.example.com'
+    token_id: 'your-token-id'
+    token: 'your-token'
+    
+    api:
+      host: 0.0.0.0
+      port: 8080
+      ssl:
+        enabled: false
+    
+    system:
+      root_directory: /var/lib/pterodactyl
+      username: pterodactyl
+      sftp:
+        bind_address: 0.0.0.0
+        bind_port: 2022
+    ```
+  </Tab>
+  
+  <Tab title="Production with SSL">
+    ```yaml
+    remote: 'https://panel.example.com'
+    token_id: 'file://${CREDENTIALS_DIRECTORY}/token_id'
+    token: 'file://${CREDENTIALS_DIRECTORY}/token'
+    
+    debug: false
+    
+    api:
+      host: 0.0.0.0
+      port: 8080
+      ssl:
+        enabled: true
+        cert: /etc/letsencrypt/live/node.example.com/fullchain.pem
+        key: /etc/letsencrypt/live/node.example.com/privkey.pem
+      upload_limit: 100
+      trusted_proxies:
+        - 127.0.0.1
+    
+    system:
+      root_directory: /var/lib/pterodactyl
+      username: pterodactyl
+      disk_check_interval: 150
+      check_permissions_on_boot: true
+      sftp:
+        bind_address: 0.0.0.0
+        bind_port: 2022
+    
+    docker:
+      network:
+        interface: 172.18.0.1
+        name: pterodactyl_nw
+      tmpfs_size: 100
+      container_pid_limit: 512
+    ```
+  </Tab>
+  
+  <Tab title="High Performance">
+    ```yaml
+    remote: 'https://panel.example.com'
+    token_id: 'your-token-id'
+    token: 'your-token'
+    
+    api:
+      host: 0.0.0.0
+      port: 8080
+      upload_limit: 500
+    
+    system:
+      root_directory: /var/lib/pterodactyl
+      username: pterodactyl
+      disk_check_interval: 300
+      check_permissions_on_boot: false
+      activity_send_interval: 30
+      activity_send_count: 200
+      sftp:
+        bind_address: 0.0.0.0
+        bind_port: 2022
+      backups:
+        write_limit: 0
+        compression_level: best_speed
+      transfers:
+        download_limit: 0
+    
+    docker:
+      container_pid_limit: 1024
+      use_performant_inspect: true
+    ```
+  </Tab>
+</Tabs>
+
+## Validating Configuration
+
+Test your configuration:
+
+```bash
+# Validate configuration file
+sudo wings --config /etc/pterodactyl/config.yml --debug
+
+# Check for errors in logs
+sudo journalctl -u wings -n 50
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Configuration Not Found">
+    Ensure the config file exists:
+    
+    ```bash
+    ls -la /etc/pterodactyl/config.yml
+    ```
+    
+    Default location: `/etc/pterodactyl/config.yml` (see config/config.go:31)
+  </Accordion>
+  
+  <Accordion title="Invalid YAML Syntax">
+    Validate YAML syntax:
+    
+    ```bash
+    # Install yamllint
+    sudo apt install yamllint
+    
+    # Check syntax
+    yamllint /etc/pterodactyl/config.yml
+    ```
+  </Accordion>
+  
+  <Accordion title="Permission Errors">
+    Check file permissions:
+    
+    ```bash
+    # Config should be readable by root
+    sudo chmod 600 /etc/pterodactyl/config.yml
+    sudo chown root:root /etc/pterodactyl/config.yml
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<Card title="Panel Configuration" icon="server" href="/installation/panel-configuration">
+  Configure the node in your Pterodactyl Panel
+</Card>

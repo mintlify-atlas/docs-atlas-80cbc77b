@@ -1,0 +1,119 @@
+---
+title: "Copy File"
+description: "Copy a file to a new location on the server"
+---
+
+## Endpoint
+
+```
+POST /api/servers/:server/files/copy
+```
+
+## Authentication
+
+Requires Bearer token authentication via the `Authorization` header.
+
+## Path Parameters
+
+<ParamField path="server" type="string" required>
+  The UUID of the server
+</ParamField>
+
+## Request Body
+
+<ParamField body="location" type="string" required>
+  The path to the destination file (relative to server root)
+</ParamField>
+
+## Query Parameters
+
+<ParamField query="file" type="string" required>
+  The source file path to copy (relative to server root)
+</ParamField>
+
+## Response
+
+Returns `204 No Content` on success.
+
+## Example Request
+
+<CodeGroup>
+```bash cURL
+curl -X POST "https://wings.example.com/api/servers/d3aac109-f0fc-4674-b5bc-199bb50e6b88/files/copy?file=server.properties" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"location": "server.properties.bak"}'
+```
+
+```javascript JavaScript
+await fetch(
+  'https://wings.example.com/api/servers/d3aac109-f0fc-4674-b5bc-199bb50e6b88/files/copy?file=world/level.dat',
+  {
+    method: 'POST',
+    headers: {
+      'Authorization': 'Bearer YOUR_TOKEN',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      location: 'backups/level.dat.bak'
+    })
+  }
+);
+```
+
+```python Python
+import requests
+
+requests.post(
+    'https://wings.example.com/api/servers/d3aac109-f0fc-4674-b5bc-199bb50e6b88/files/copy',
+    params={'file': 'config.yml'},
+    headers={'Authorization': 'Bearer YOUR_TOKEN'},
+    json={'location': 'config.yml.backup'}
+)
+```
+</CodeGroup>
+
+## Behavior
+
+- Creates a complete copy of the source file
+- Only files can be copied (not directories)
+- Parent directories in the destination path are created automatically
+- File permissions and ownership are preserved
+- If destination file already exists, it will be overwritten
+- Ignored files (`.pteroignore`) cannot be copied to or from
+- Path traversal is prevented
+
+<Info>
+  To copy directories, use the compress endpoint to create an archive, then decompress it to the new location.
+</Info>
+
+## Error Responses
+
+<AccordionGroup>
+  <Accordion title="400 Bad Request">
+    Source is a directory (not supported)
+  </Accordion>
+  <Accordion title="401 Unauthorized">
+    Missing or invalid Bearer token
+  </Accordion>
+  <Accordion title="403 Forbidden">
+    File is on the ignore list or path traversal attempt
+  </Accordion>
+  <Accordion title="404 Not Found">
+    Server or source file does not exist
+  </Accordion>
+  <Accordion title="500 Internal Server Error">
+    Failed to copy file (disk full, permission error, etc.)
+  </Accordion>
+</AccordionGroup>
+
+## Use Cases
+
+- Create backup copies of important files
+- Duplicate configuration for testing
+- Copy template files
+- Create snapshots before modifications
+
+## Source Reference
+
+Implementation: `router/router_server_files.go` (postServerCopyFile function)

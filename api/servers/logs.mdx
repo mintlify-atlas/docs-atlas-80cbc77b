@@ -1,0 +1,96 @@
+---
+title: Get Server Logs
+api: GET /api/servers/:server/logs
+---
+
+Retrrieves the most recent lines from the server's console log file.
+
+## Authentication
+
+Requires the Wings authentication token in the `Authorization` header:
+
+```
+Authorization: Bearer <token>
+```
+
+## Path Parameters
+
+<ParamField path="server" type="string" required>
+  The UUID of the server
+</ParamField>
+
+## Query Parameters
+
+<ParamField query="size" type="integer" default={100}>
+  Number of lines to retrieve from the log file. Minimum: 1, Maximum: 100. Values outside this range are clamped to the limits.
+</ParamField>
+
+## Response
+
+<ResponseField name="data" type="array">
+  Array of log line strings from the server's console output. Lines are returned in chronological order (oldest first).
+</ResponseField>
+
+## Error Responses
+
+<ResponseField name="404 Not Found">
+  The requested server does not exist on this Wings instance.
+</ResponseField>
+
+<ResponseField name="500 Internal Server Error">
+  An error occurred while reading the log file.
+</ResponseField>
+
+## Behavior
+
+- Reads from the server's persistent log file
+- Returns the last N lines from the file (where N is the `size` parameter)
+- Log lines are returned as raw strings
+- If the log file has fewer lines than requested, all available lines are returned
+- Size parameter is automatically clamped between 1 and 100
+
+## Example Requests
+
+### Get Last 100 Lines (Default)
+```bash
+curl -X GET https://wings.example.com/api/servers/8d3f9a2e-5c7b-4f1e-9d2a-6e8f1c3b5a7d/logs \
+  -H "Authorization: Bearer your-wings-token" \
+  -H "Accept: application/json"
+```
+
+### Get Last 50 Lines
+```bash
+curl -X GET "https://wings.example.com/api/servers/8d3f9a2e-5c7b-4f1e-9d2a-6e8f1c3b5a7d/logs?size=50" \
+  -H "Authorization: Bearer your-wings-token" \
+  -H "Accept: application/json"
+```
+
+## Example Response
+
+```json
+{
+  "data": [
+    "[10:30:15] [Server thread/INFO]: Starting minecraft server version 1.20.1",
+    "[10:30:15] [Server thread/INFO]: Loading properties",
+    "[10:30:15] [Server thread/INFO]: Default game type: SURVIVAL",
+    "[10:30:16] [Server thread/INFO]: Generating keypair",
+    "[10:30:16] [Server thread/INFO]: Starting Minecraft server on *:25565",
+    "[10:30:17] [Server thread/INFO]: Preparing level \"world\"",
+    "[10:30:18] [Server thread/INFO]: Preparing start region for dimension minecraft:overworld",
+    "[10:30:20] [Server thread/INFO]: Done (5.234s)! For help, type \"help\""
+  ]
+}
+```
+
+## Notes
+
+- This endpoint reads from a persistent log file, not live output
+- For real-time log streaming, use the websocket connection
+- Log files are rotated/cleared on server restart (depending on configuration)
+- The maximum retrievable lines is capped at 100 for performance reasons
+- Empty log files return an empty array
+- This is useful for viewing recent server output without establishing a websocket connection
+
+## Source Reference
+
+Implemented in `router/router_server.go:26` and `server/server.go:252`

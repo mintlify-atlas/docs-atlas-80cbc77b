@@ -1,0 +1,558 @@
+---
+title: Backups
+description: Creating, restoring, and managing server backups
+---
+
+Wings supports automated backup creation and restoration with multiple storage adapters including local storage and S3-compatible endpoints.
+
+## Backup Formats
+
+### Archive Format
+
+Backups are created as compressed tar archives:
+
+```go
+var format = archives.CompressedArchive{
+    Compression: archives.Gz{},
+    Archival:    archives.Tar{},
+    Extraction:  archives.Tar{},
+}
+```
+
+**Format:** `.tar.gz` (gzipped tar archive)
+
+**Checksum:** SHA1 hash
+
+**Source:** `server/backup/backup.go:22-26`
+
+## Backup Adapters
+
+### Adapter Types
+
+```go
+const (
+    LocalBackupAdapter AdapterType = "wings"
+    S3BackupAdapter    AdapterType = "s3"
+)
+```
+
+**Source:** `server/backup/backup.go:30-33`
+
+### Local Backups
+
+Stored on the Wings machine in the configured backup directory:
+
+```go
+func (b *Backup) Path() string {
+    return path.Join(config.Get().System.BackupDirectory, b.Identifier()+".tar.gz")
+}
+```
+
+**Default Path:** `/var/lib/pterodactyl/backups/{uuid}.tar.gz`
+
+**Source:** `server/backup/backup.go:95-97`
+
+### S3 Backups
+
+Uploaded to S3-compatible storage after creation:
+
+- Supports multipart uploads for large backups
+- Automatic retry with exponential backoff
+- Local copy deleted after successful upload
+- 2-hour timeout for upload operations
+
+**Source:** `server/backup/backup_s3.go:51-156`
+
+## Creating Backups
+
+### API Endpoint
+
+```bash
+POST /api/servers/{server}/backup
+```
+
+<CodeGroup>
+```bash Request
+curl -X POST http://localhost:8080/api/servers/{server}/backup \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "uuid": "8a3e7e6f-2b4c-4d9e-8f7a-1c2d3e4f5a6b",
+    "ignore": "*.log\nnode_modules/\ncache/"
+  }'
+```
+
+```json Response
+HTTP/1.1 202 Accepted
+```
+</CodeGroup>
+
+**Source:** `router/router.go:108`
+
+### Backup Process
+
+```go
+func (s *Server) Backup(b backup.BackupInterface) error {
+    // 1. Get ignored files
+    ignored := b.Ignored()
+    if ignored == "" {
+        ignored, _ = s.getServerwideIgnoredFiles()
+    }
+    
+    // 2. Generate archive
+    ad, err := b.Generate(s.Context(), s.Filesystem(), ignored)
+    
+    // 3. Notify Panel of status
+    s.notifyPanelOfBackup(b.Identifier(), ad, err == nil)
+    
+    // 4. Emit websocket event
+    s.Events().Publish(BackupCompletedEvent, data)
+}
+```
+
+**Source:** `server/backup.go:60-114`
+
+### Ignore Patterns
+
+#### Server-Wide Ignore File
+
+Create `.pteroignore` in server root:
+
+```gitignore
+# Example .pteroignore
+*.log
+*.tmp
+node_modules/
+cache/
+temp/
+```
+
+**Constraints:**
+- Max size: 32 KiB
+- Cannot be a symlink
+- Uses gitignore syntax
+
+**Source:** `server/backup.go:37-55`
+
+#### Backup-Specific Ignore
+
+Pass ignore patterns in backup request:
+
+```json
+{
+  "uuid": "backup-uuid",
+  "ignore": "*.log\ncache/"
+}
+```
+
+### Local Backup Generation
+
+```go
+func (b *LocalBackup) Generate(ctx context.Context, fsys *filesystem.Filesystem, ignore string) (*ArchiveDetails, error) {
+    a := &filesystem.Archive{
+        Filesystem: fsys,
+        Ignore:     ignore,
+    }
+    
+    // Create archive
+    err := a.Create(ctx, b.Path())
+    
+    // Calculate details
+    ad, err := b.Details(ctx, nil)
+    return ad, nil
+}
+```
+
+**Source:** `server/backup/backup_local.go:62-79`
+
+### S3 Backup Generation
+
+```go
+func (s *S3Backup) Generate(ctx context.Context, fsys *filesystem.Filesystem, ignore string) (*ArchiveDetails, error) {
+    defer s.Remove() // Delete local copy after upload
+    
+    // 1. Create local archive
+    a := &filesystem.Archive{Filesystem: fsys, Ignore: ignore}
+    a.Create(ctx, s.Path())
+    
+    // 2. Open archive file
+    rc, _ := os.Open(s.Path())
+    defer rc.Close()
+    
+    // 3. Upload to S3
+    parts, err := s.generateRemoteRequest(ctx, rc)
+    
+    // 4. Get archive details
+    ad, err := s.Details(ctx, parts)
+    return ad, nil
+}
+```
+
+**Source:** `server/backup/backup_s3.go:51-80`
+
+### S3 Multipart Upload
+
+```go
+func (s *S3Backup) generateRemoteRequest(ctx context.Context, rc io.ReadCloser) ([]remote.BackupPart, error) {
+    // Get backup size
+    size, _ := s.Backup.Size()
+    
+    // Get presigned URLs from Panel
+    urls, _ := s.client.GetBackupRemoteUploadURLs(context.Background(), s.Backup.Uuid, size)
+    
+    // Upload each part
+    uploader := newS3FileUploader(rc)
+    for i, part := range urls.Parts {
+        partSize := urls.PartSize
+        if i+1 == len(urls.Parts) {
+            partSize = size - (int64(i) * urls.PartSize)
+        }
+        
+        etag, err := uploader.uploadPart(ctx, part, partSize)
+        uploader.uploadedParts = append(uploader.uploadedParts, remote.BackupPart{
+            ETag:       etag,
+            PartNumber: i + 1,
+        })
+    }
+    
+    return uploader.uploadedParts, nil
+}
+```
+
+**Features:**
+- 2-hour HTTP timeout per part
+- Automatic retry with exponential backoff
+- ETags collected for multipart completion
+
+**Source:** `server/backup/backup_s3.go:111-156`
+
+## Archive Details
+
+### Details Structure
+
+```go
+type ArchiveDetails struct {
+    Checksum     string              `json:"checksum"`
+    ChecksumType string              `json:"checksum_type"`
+    Size         int64               `json:"size"`
+    Parts        []remote.BackupPart `json:"parts"`
+}
+```
+
+**Source:** `server/backup/backup.go:171-176`
+
+### Calculating Details
+
+```go
+func (b *Backup) Details(ctx context.Context, parts []remote.BackupPart) (*ArchiveDetails, error) {
+    ad := ArchiveDetails{ChecksumType: "sha1", Parts: parts}
+    
+    // Calculate checksum and size in parallel
+    g, ctx := errgroup.WithContext(ctx)
+    
+    g.Go(func() error {
+        resp, _ := b.Checksum()
+        ad.Checksum = hex.EncodeToString(resp)
+        return nil
+    })
+    
+    g.Go(func() error {
+        s, _ := b.Size()
+        ad.Size = s
+        return nil
+    })
+    
+    g.Wait()
+    return &ad, nil
+}
+```
+
+**Source:** `server/backup/backup.go:129-155`
+
+### Checksum Calculation
+
+```go
+func (b *Backup) Checksum() ([]byte, error) {
+    h := sha1.New()
+    
+    f, _ := os.Open(b.Path())
+    defer f.Close()
+    
+    buf := make([]byte, 1024*4)
+    io.CopyBuffer(h, f, buf)
+    
+    return h.Sum(nil), nil
+}
+```
+
+**Buffer Size:** 4 KiB
+
+**Algorithm:** SHA1
+
+**Source:** `server/backup/backup.go:110-125`
+
+## Restoring Backups
+
+### API Endpoint
+
+```bash
+POST /api/servers/{server}/backup/{backup}/restore
+```
+
+<CodeGroup>
+```bash Local Restore
+curl -X POST http://localhost:8080/api/servers/{server}/backup/{backup}/restore \
+  -H "Authorization: Bearer <token>"
+```
+
+```bash Remote Restore
+curl -X POST http://localhost:8080/api/servers/{server}/backup/{backup}/restore \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "adapter": "s3",
+    "url": "https://s3.amazonaws.com/..."
+  }'
+```
+</CodeGroup>
+
+**Source:** `router/router.go:109`
+
+### Restore Process
+
+```go
+func (s *Server) RestoreBackup(b backup.BackupInterface, reader io.ReadCloser) error {
+    // 1. Suspend server
+    s.Config().SetSuspended(true)
+    defer s.Config().SetSuspended(false)
+    
+    // 2. Stop server if running
+    if s.Environment.State() != environment.ProcessOfflineState {
+        s.Environment.WaitForStop(s.Context(), 2*time.Minute, false)
+    }
+    
+    // 3. Restore files
+    err = b.Restore(s.Context(), reader, func(file string, info fs.FileInfo, r io.ReadCloser) error {
+        defer r.Close()
+        
+        // Publish progress event
+        s.Events().Publish(DaemonMessageEvent, "(restoring): "+file)
+        
+        // Write file
+        s.Filesystem().Write(file, r, info.Size(), info.Mode())
+        
+        // Restore timestamps
+        atime := info.ModTime()
+        s.Filesystem().Chtimes(file, atime, atime)
+    })
+    
+    // 4. Notify Panel
+    defer s.client.SendRestorationStatus(s.Context(), b.Identifier(), err == nil)
+}
+```
+
+**Source:** `server/backup.go:122-168`
+
+### Local Restore
+
+```go
+func (b *LocalBackup) Restore(ctx context.Context, _ io.Reader, callback RestoreCallback) error {
+    f, _ := os.Open(b.Path())
+    defer f.Close()
+    
+    var reader io.Reader = f
+    
+    // Apply write rate limit
+    if writeLimit := int64(config.Get().System.Backups.WriteLimit * 1024 * 1024); writeLimit > 0 {
+        reader = ratelimit.Reader(f, ratelimit.NewBucketWithRate(float64(writeLimit), writeLimit))
+    }
+    
+    // Extract archive
+    format.Extract(ctx, reader, func(ctx context.Context, f archives.FileInfo) error {
+        r, _ := f.Open()
+        defer r.Close()
+        
+        return callback(f.NameInArchive, f.FileInfo, r)
+    })
+}
+```
+
+**Source:** `server/backup/backup_local.go:83-108`
+
+### S3 Restore
+
+```go
+func (s *S3Backup) Restore(ctx context.Context, r io.Reader, callback RestoreCallback) error {
+    reader := r
+    
+    // Apply write rate limit
+    if writeLimit := int64(config.Get().System.Backups.WriteLimit * 1024 * 1024); writeLimit > 0 {
+        reader = ratelimit.Reader(r, ratelimit.NewBucketWithRate(float64(writeLimit), writeLimit))
+    }
+    
+    // Extract archive from stream
+    format.Extract(ctx, reader, func(ctx context.Context, f archives.FileInfo) error {
+        r, _ := f.Open()
+        defer r.Close()
+        
+        return callback(f.NameInArchive, f.FileInfo, r)
+    })
+}
+```
+
+**Source:** `server/backup/backup_s3.go:89-108`
+
+## Panel Notifications
+
+### Backup Status
+
+```go
+func (s *Server) notifyPanelOfBackup(uuid string, ad *backup.ArchiveDetails, successful bool) error {
+    return s.client.SetBackupStatus(s.Context(), uuid, ad.ToRequest(successful))
+}
+```
+
+**Request Structure:**
+```json
+{
+  "checksum": "a1b2c3d4e5f6...",
+  "checksum_type": "sha1",
+  "size": 1048576,
+  "successful": true,
+  "parts": [
+    {"PartNumber": 1, "ETag": "etag1"},
+    {"PartNumber": 2, "ETag": "etag2"}
+  ]
+}
+```
+
+**Source:** `server/backup.go:20-34`
+
+### Restoration Status
+
+```go
+func (s *Server) RestoreBackup(b backup.BackupInterface, reader io.ReadCloser) error {
+    defer func() {
+        s.client.SendRestorationStatus(s.Context(), b.Identifier(), err == nil)
+    }()
+}
+```
+
+**Source:** `server/backup.go:134-138`
+
+## Websocket Events
+
+### Backup Completed
+
+```go
+s.Events().Publish(BackupCompletedEvent+":"+b.Identifier(), map[string]interface{}{
+    "uuid":          b.Identifier(),
+    "is_successful": true,
+    "checksum":      ad.Checksum,
+    "checksum_type": "sha1",
+    "file_size":     ad.Size,
+})
+```
+
+**Event Name:** `backup completed:{uuid}`
+
+**Source:** `server/backup.go:105-111`
+
+### Restore Progress
+
+```go
+s.Events().Publish(DaemonMessageEvent, "(restoring): "+file)
+```
+
+**Event Name:** `daemon message`
+
+**Source:** `server/backup.go:156`
+
+## Rate Limiting
+
+### Write Limit
+
+Backup restoration can be rate-limited to prevent disk overload:
+
+```yaml
+system:
+  backups:
+    write_limit: 128  # MB/s
+```
+
+```go
+if writeLimit := int64(config.Get().System.Backups.WriteLimit * 1024 * 1024); writeLimit > 0 {
+    reader = ratelimit.Reader(f, ratelimit.NewBucketWithRate(float64(writeLimit), writeLimit))
+}
+```
+
+**Default:** Unlimited (0)
+
+**Source:** `server/backup/backup_local.go:93-95`
+
+## Deleting Backups
+
+### API Endpoint
+
+```bash
+DELETE /api/servers/{server}/backup/{backup}
+```
+
+**Source:** `router/router.go:110`
+
+### Local Backup Removal
+
+```go
+func (b *LocalBackup) Remove() error {
+    return os.Remove(b.Path())
+}
+```
+
+**Source:** `server/backup/backup_local.go:51-53`
+
+### S3 Backup Removal
+
+```go
+func (s *S3Backup) Remove() error {
+    return os.Remove(s.Path())
+}
+```
+
+**Note:** Only removes local copy. S3 deletion handled by Panel.
+
+**Source:** `server/backup/backup_s3.go:40-42`
+
+## Storage Locations
+
+### Configuration
+
+```yaml
+system:
+  backup_directory: /var/lib/pterodactyl/backups
+```
+
+### Backup Naming
+
+Backups are stored with their UUID as the filename:
+
+```
+/var/lib/pterodactyl/backups/{uuid}.tar.gz
+```
+
+### Locating Backups
+
+```go
+func LocateLocal(client remote.Client, uuid string) (*LocalBackup, os.FileInfo, error) {
+    b := NewLocal(client, uuid, "")
+    st, err := os.Stat(b.Path())
+    if err != nil {
+        return nil, nil, err
+    }
+    if st.IsDir() {
+        return nil, nil, errors.New("invalid archive, is directory")
+    }
+    return b, st, nil
+}
+```
+
+**Source:** `server/backup/backup_local.go:36-48`

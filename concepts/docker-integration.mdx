@@ -1,0 +1,654 @@
+---
+title: Docker Integration
+description: How Pterodactyl Wings uses Docker to isolate and manage game servers
+---
+
+Pterodactyl Wings uses Docker as its container runtime to provide isolation, resource management, and consistent environments for game servers. Each server runs in its own Docker container with carefully configured security and resource constraints.
+
+## Why Docker?
+
+Wings exclusively uses Docker for several key reasons:
+
+- **Isolation** - Each server runs in an isolated environment
+- **Resource Control** - CPU, memory, and I/O limits are enforced
+- **Security** - Containers provide security boundaries
+- **Consistency** - Same environment across different host systems
+- **Image Management** - Easy distribution of game server environments
+
+<Note>
+Currently, Wings only supports Docker as an environment. The architecture allows for other environments in the future, but Docker is hardcoded in server initialization (`server/manager.go:204-206`).
+</Note>
+
+## Docker Environment Structure
+
+Each server has a Docker environment that manages its container lifecycle.
+
+### Environment Type
+
+```go
+// From environment/docker/environment.go:29-58
+type Environment struct {
+    mu sync.RWMutex
+    
+    // Container identifier (server UUID)
+    Id string
+    
+    // Environment configuration
+    Configuration *environment.Configuration
+    
+    // Container metadata
+    meta *Metadata
+    
+    // Docker client
+    client *client.Client
+    
+    // Hijacked response stream for container I/O
+    stream *types.HijackedResponse
+    
+    // Stats stream
+    stats io.ReadCloser
+    
+    // Event bus
+    emitter *events.Bus
+    
+    // Log callback
+    logCallback func([]byte)
+    
+    // Current state
+    st *system.AtomicString
+}
+```
+
+### Container Naming
+
+Containers are named using the server's UUID:
+
+```go
+// From environment/docker/environment.go:64-80
+func New(id string, m *Metadata, c *environment.Configuration) (*Environment, error) {
+    cli, err := environment.Docker()
+    if err != nil {
+        return nil, err
+    }
+    
+    e := &Environment{
+        Id:            id,  // Server UUID becomes container name
+        Configuration: c,
+        meta:          m,
+        client:        cli,
+        st:            system.NewAtomicString(environment.ProcessOfflineState),
+        emitter:       events.NewBus(),
+    }
+    
+    return e, nil
+}
+```
+
+## Container Creation
+
+Wings creates containers with specific configurations for security and functionality.
+
+### Container Configuration
+
+```go
+// From environment/docker/container.go:176-188
+conf := &container.Config{
+    Hostname:     e.Id,
+    Domainname:   cfg.Docker.Domainname,
+    AttachStdin:  true,
+    AttachStdout: true,
+    AttachStderr: true,
+    OpenStdin:    true,
+    Tty:          true,
+    ExposedPorts: a.Exposed(),
+    Image:        strings.TrimPrefix(e.meta.Image, "~"),
+    Env:          e.Configuration.EnvironmentVariables(),
+    Labels:       labels,
+}
+```
+
+**Key Settings:**
+- **TTY enabled** - Allows interactive console access
+- **Stdin open** - Enables command sending
+- **Exposed ports** - Defined by server allocations
+
+### User Configuration
+
+Containers run as a specific user for security:
+
+```go
+// From environment/docker/container.go:191-195
+if cfg.System.User.Rootless.Enabled {
+    conf.User = fmt.Sprintf("%d:%d", cfg.System.User.Rootless.ContainerUID, cfg.System.User.Rootless.ContainerGID)
+} else {
+    conf.User = strconv.Itoa(cfg.System.User.Uid) + ":" + strconv.Itoa(cfg.System.User.Gid)
+}
+```
+
+This ensures server processes don't run as root inside containers.
+
+### Host Configuration
+
+```go
+// From environment/docker/container.go:227-260
+hostConf := &container.HostConfig{
+    PortBindings: a.DockerBindings(),
+    Mounts:       e.convertMounts(),
+    Tmpfs: map[string]string{
+        "/tmp": "rw,exec,nosuid,size=" + strconv.Itoa(int(cfg.Docker.TmpfsSize)) + "M",
+    },
+    Resources:      e.Configuration.Limits().AsContainerResources(),
+    DNS:            cfg.Docker.Network.Dns,
+    LogConfig:      cfg.Docker.ContainerLogConfig(),
+    SecurityOpt:    []string{"no-new-privileges"},
+    ReadonlyRootfs: true,
+    CapDrop: []string{
+        "setpcap", "mknod", "audit_write", "net_raw", "dac_override",
+        "fowner", "fsetid", "net_bind_service", "sys_chroot", "setfcap",
+    },
+    NetworkMode: networkMode,
+    UsernsMode:  container.UsernsMode(cfg.Docker.UsernsMode),
+}
+```
+
+**Security Features:**
+- **Read-only root filesystem** - Prevents tampering with container OS
+- **Dropped capabilities** - Removes unnecessary Linux capabilities
+- **no-new-privileges** - Prevents privilege escalation
+- **tmpfs /tmp** - Writable temporary directory in memory
+
+## Resource Limits
+
+Docker enforces resource limits to prevent servers from consuming excessive resources.
+
+### Resource Types
+
+```go
+type Limits struct {
+    MemoryLimit int64  // Memory in MB
+    CpuLimit    int64  // CPU percentage (100 = 1 core)
+    DiskSpace   int64  // Disk in MB (enforced by Wings, not Docker)
+    IoWeight    uint16 // I/O priority weight
+    Threads     int64  // PID limit
+}
+```
+
+### Applying Limits
+
+Limits are converted to Docker resource constraints:
+
+```go
+func (c *Configuration) AsContainerResources() container.Resources {
+    return container.Resources{
+        Memory:            c.MemoryLimit * 1024 * 1024,  // Convert MB to bytes
+        MemoryReservation: c.MemoryLimit * 1024 * 1024,
+        MemorySwap:        c.MemoryLimit * 1024 * 1024,
+        CPUQuota:          c.CpuLimit * 1000,            // Convert to microseconds
+        CPUPeriod:         100000,
+        BlkioWeight:       c.IoWeight,
+        PidsLimit:         &c.Threads,
+    }
+}
+```
+
+### In-Situ Updates
+
+Limits can be updated without restarting the container:
+
+```go
+// From environment/docker/container.go:106-133
+func (e *Environment) InSituUpdate() error {
+    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+    defer cancel()
+    
+    if _, err := e.ContainerInspect(ctx); err != nil {
+        if client.IsErrNotFound(err) {
+            return nil  // Container doesn't exist, nothing to update
+        }
+        return errors.Wrap(err, "could not inspect container")
+    }
+    
+    if _, err := e.client.ContainerUpdate(ctx, e.Id, container.UpdateConfig{
+        Resources: e.Configuration.Limits().AsContainerResources(),
+    }); err != nil {
+        return errors.Wrap(err, "could not update container")
+    }
+    
+    return nil
+}
+```
+
+<Warning>
+CPU pinning and memory limits cannot be removed once applied - the container must be recreated.
+</Warning>
+
+## Networking
+
+Wings configures networking to expose server ports and control traffic.
+
+### Port Bindings
+
+Server allocations are mapped to container ports:
+
+```go
+type Allocation struct {
+    Ip      string
+    Port    int
+}
+
+func (a *Allocations) DockerBindings() nat.PortMap {
+    bindings := nat.PortMap{}
+    for _, alloc := range a.Mappings {
+        binding := nat.PortBinding{
+            HostIP:   alloc.Ip,
+            HostPort: strconv.Itoa(alloc.Port),
+        }
+        bindings[nat.Port(fmt.Sprintf("%d/tcp", alloc.Port))] = []nat.PortBinding{binding}
+        bindings[nat.Port(fmt.Sprintf("%d/udp", alloc.Port))] = []nat.PortBinding{binding}
+    }
+    return bindings
+}
+```
+
+Both TCP and UDP ports are exposed for each allocation.
+
+### Network Modes
+
+Wings supports different network configurations:
+
+**Bridge Mode (Default):**
+```go
+NetworkMode: container.NetworkMode(cfg.Docker.Network.Mode)  // e.g., "pterodactyl0"
+```
+
+**Force Outgoing IP:**
+When enabled, creates a dedicated bridge network per server:
+
+```go
+// From environment/docker/container.go:198-225
+if a.ForceOutgoingIP {
+    networkName := "ip-" + strings.ReplaceAll(strings.ReplaceAll(a.DefaultMapping.Ip, ".", "-"), ":", "-")
+    networkMode = container.NetworkMode(networkName)
+    
+    if _, err := e.client.NetworkInspect(ctx, networkName, network.InspectOptions{}); err != nil {
+        if !client.IsErrNotFound(err) {
+            return err
+        }
+        
+        if _, err := e.client.NetworkCreate(ctx, networkName, network.CreateOptions{
+            Driver: "bridge",
+            Options: map[string]string{
+                "com.docker.network.host_ipv4": a.DefaultMapping.Ip,
+            },
+        }); err != nil {
+            return err
+        }
+    }
+}
+```
+
+### Internal IP Translation
+
+The Panel uses `127.0.0.1` as a placeholder, which Wings translates:
+
+```go
+// From environment/docker/container.go:159-164
+for i, v := range evs {
+    // Convert 127.0.0.1 to the pterodactyl0 network interface
+    if v == "SERVER_IP=127.0.0.1" {
+        evs[i] = "SERVER_IP=" + cfg.Docker.Network.Interface
+    }
+}
+```
+
+## Container Lifecycle
+
+### Container Attachment
+
+Before starting, Wings attaches to the container for I/O:
+
+```go
+// From environment/docker/container.go:48-100
+func (e *Environment) Attach(ctx context.Context) error {
+    if e.IsAttached() {
+        return nil
+    }
+    
+    opts := container.AttachOptions{
+        Stdin:  true,
+        Stdout: true,
+        Stderr: true,
+        Stream: true,
+    }
+    
+    if st, err := e.client.ContainerAttach(ctx, e.Id, opts); err != nil {
+        return errors.WrapIf(err, "error while attaching to container")
+    } else {
+        e.SetStream(&st)
+    }
+    
+    go func() {
+        // Create context for polling
+        pollCtx, cancel := context.WithCancel(context.Background())
+        defer cancel()
+        defer e.stream.Close()
+        defer func() {
+            e.SetState(environment.ProcessOfflineState)
+            e.SetStream(nil)
+        }()
+        
+        // Start resource polling
+        go e.pollResources(pollCtx)
+        
+        // Scan output and send to callback
+        if err := system.ScanReader(e.stream.Reader, func(v []byte) {
+            e.logCallbackMx.Lock()
+            defer e.logCallbackMx.Unlock()
+            e.logCallback(v)
+        }); err != nil && err != io.EOF {
+            log.WithField("error", err).Warn("error processing console output")
+        }
+    }()
+    
+    return nil
+}
+```
+
+**The attachment goroutine:**
+1. Polls container resource usage
+2. Reads console output
+3. Calls the log callback (sends to websockets)
+4. Automatically cleans up when container stops
+
+### Container Starting
+
+The start sequence ensures everything is ready:
+
+```go
+// From environment/docker/power.go:51-130
+func (e *Environment) Start(ctx context.Context) error {
+    sawError := false
+    defer func() {
+        if sawError {
+            e.SetState(environment.ProcessStoppingState)
+            e.SetState(environment.ProcessOfflineState)
+        }
+    }()
+    
+    // Check if already running
+    if c, err := e.ContainerInspect(ctx); err == nil {
+        if c.State.Running {
+            e.SetState(environment.ProcessRunningState)
+            return e.Attach(ctx)
+        }
+        
+        // Truncate old logs
+        if _, err := os.Stat(c.LogPath); err == nil {
+            os.Truncate(c.LogPath, 0)
+        }
+    }
+    
+    e.SetState(environment.ProcessStartingState)
+    sawError = true
+    
+    // Recreate container with latest config
+    if err := e.OnBeforeStart(ctx); err != nil {
+        return err
+    }
+    
+    // Attach BEFORE starting (critical ordering)
+    actx, cancel := context.WithTimeout(ctx, time.Second*30)
+    defer cancel()
+    
+    if err := e.Attach(actx); err != nil {
+        return errors.WrapIf(err, "failed to attach to container")
+    }
+    
+    if err := e.client.ContainerStart(actx, e.Id, container.StartOptions{}); err != nil {
+        return errors.WrapIf(err, "failed to start container")
+    }
+    
+    sawError = false
+    return nil
+}
+```
+
+<Warning>
+Attachment must occur **before** starting the container. Reversing this order causes a deadlock.
+</Warning>
+
+### Container Destruction
+
+When a server is deleted, its container is removed:
+
+```go
+// From environment/docker/container.go:271-292
+func (e *Environment) Destroy() error {
+    e.SetState(environment.ProcessStoppingState)
+    
+    err := e.client.ContainerRemove(context.Background(), e.Id, container.RemoveOptions{
+        RemoveVolumes: true,
+        RemoveLinks:   false,
+        Force:         true,
+    })
+    
+    e.SetState(environment.ProcessOfflineState)
+    
+    // Don't error on container not found
+    if err != nil && client.IsErrNotFound(err) {
+        return nil
+    }
+    
+    return err
+}
+```
+
+## Image Management
+
+Wings automatically pulls Docker images when needed.
+
+### Image Pulling
+
+```go
+// From environment/docker/container.go:348-439
+func (e *Environment) ensureImageExists(img string) error {
+    e.Events().Publish(environment.DockerImagePullStarted, "")
+    defer e.Events().Publish(environment.DockerImagePullCompleted, "")
+    
+    // Skip local images (prefixed with ~)
+    if strings.HasPrefix(img, "~") {
+        return nil
+    }
+    
+    ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+    defer cancel()
+    
+    // Get registry authentication
+    var registryAuth *config.RegistryConfiguration
+    for registry, c := range config.Get().Docker.Registries {
+        if strings.HasPrefix(img, registry) {
+            registryAuth = &c
+            break
+        }
+    }
+    
+    imagePullOptions := image.PullOptions{All: false}
+    if registryAuth != nil {
+        b64, err := registryAuth.Base64()
+        if err == nil {
+            imagePullOptions.RegistryAuth = b64
+        }
+    }
+    
+    out, err := e.client.ImagePull(ctx, img, imagePullOptions)
+    if err != nil {
+        // Check if image exists locally
+        images, ierr := e.client.ImageList(ctx, image.ListOptions{})
+        if ierr != nil {
+            return ierr
+        }
+        
+        for _, img2 := range images {
+            for _, t := range img2.RepoTags {
+                if t == img {
+                    log.Warn("unable to pull image but it exists locally")
+                    return nil  // Use local copy
+                }
+            }
+        }
+        
+        return errors.Wrapf(err, "failed to pull image: %s", img)
+    }
+    defer out.Close()
+    
+    // Block until pull completes
+    scanner := bufio.NewScanner(out)
+    for scanner.Scan() {
+        b := scanner.Bytes()
+        status, _ := jsonparser.GetString(b, "status")
+        progress, _ := jsonparser.GetString(b, "progress")
+        e.Events().Publish(environment.DockerImagePullStatus, status+" "+progress)
+    }
+    
+    return scanner.Err()
+}
+```
+
+**Fallback Behavior:**
+If the image pull fails but the image exists locally (e.g., during registry outage), Wings uses the local copy and logs a warning.
+
+### Registry Authentication
+
+Wings supports private registry authentication configured in `config.yml`:
+
+```yaml
+docker:
+  registries:
+    registry.example.com:
+      username: myuser
+      password: mypassword
+```
+
+## Mounts and Volumes
+
+Wings mounts the server's data directory into containers:
+
+```go
+// From environment/docker/container.go:441-453
+func (e *Environment) convertMounts() []mount.Mount {
+    mounts := e.Configuration.Mounts()
+    out := make([]mount.Mount, len(mounts))
+    for i, m := range mounts {
+        out[i] = mount.Mount{
+            Type:     mount.TypeBind,
+            Source:   m.Source,
+            Target:   m.Target,
+            ReadOnly: m.ReadOnly,
+        }
+    }
+    return out
+}
+```
+
+**Primary Mount:**
+```go
+Source: "/var/lib/pterodactyl/volumes/" + serverUUID
+Target: "/home/container"
+ReadOnly: false
+```
+
+Additional mounts can be defined for shared libraries or configurations.
+
+## Console I/O
+
+### Sending Commands
+
+Commands are sent through the attached stream:
+
+```go
+// From environment/docker/container.go:294-315
+func (e *Environment) SendCommand(c string) error {
+    if !e.IsAttached() {
+        return errors.Wrap(ErrNotAttached, "cannot send command")
+    }
+    
+    e.mu.RLock()
+    defer e.mu.RUnlock()
+    
+    // Detect stop command to update state
+    if e.meta.Stop.Type == "command" && c == e.meta.Stop.Value {
+        e.SetState(environment.ProcessStoppingState)
+    }
+    
+    _, err := e.stream.Conn.Write([]byte(c + "\n"))
+    return errors.Wrap(err, "could not write to container stream")
+}
+```
+
+### Reading Logs
+
+Historical logs are retrieved from Docker:
+
+```go
+// From environment/docker/container.go:317-338
+func (e *Environment) Readlog(lines int) ([]string, error) {
+    r, err := e.client.ContainerLogs(context.Background(), e.Id, container.LogsOptions{
+        ShowStdout: true,
+        ShowStderr: true,
+        Tail:       strconv.Itoa(lines),
+    })
+    if err != nil {
+        return nil, errors.WithStack(err)
+    }
+    defer r.Close()
+    
+    var out []string
+    scanner := bufio.NewScanner(r)
+    for scanner.Scan() {
+        out = append(out, scanner.Text())
+    }
+    
+    return out, nil
+}
+```
+
+## Container Recreation
+
+Containers are recreated on every start to apply configuration changes:
+
+```go
+// From environment/docker/power.go:26-46
+func (e *Environment) OnBeforeStart(ctx context.Context) error {
+    // Always destroy and re-create the container
+    if err := e.client.ContainerRemove(ctx, e.Id, container.RemoveOptions{
+        RemoveVolumes: true,
+    }); err != nil {
+        if !client.IsErrNotFound(err) {
+            return errors.WrapIf(err, "failed to remove container")
+        }
+    }
+    
+    // Create container with latest configuration
+    if err := e.Create(); err != nil {
+        return err
+    }
+    
+    return nil
+}
+```
+
+This ensures that environment variables, resource limits, and other settings are always current.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Architecture" icon="diagram-project" href="/concepts/architecture">
+    Understand the overall system architecture
+  </Card>
+  <Card title="Server Lifecycle" icon="arrows-rotate" href="/concepts/server-lifecycle">
+    Learn about server states and transitions
+  </Card>
+  <Card title="File Management" icon="folder" href="/concepts/file-management">
+    Explore filesystem operations
+  </Card>
+</CardGroup>

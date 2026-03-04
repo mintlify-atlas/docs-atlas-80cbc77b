@@ -1,0 +1,389 @@
+---
+title: Server Management
+description: Managing server lifecycle, power actions, and operations
+---
+
+Wings provides comprehensive server lifecycle management through both API endpoints and internal processes.
+
+## Server Lifecycle
+
+### Server Structure
+
+Each server instance in Wings is represented by the `Server` struct:
+
+```go
+type Server struct {
+    cfg    Configuration
+    client remote.Client
+    
+    // Server states
+    installing   *system.AtomicBool
+    transferring *system.AtomicBool
+    restoring    *system.AtomicBool
+    
+    resources   ResourceUsage
+    Environment environment.ProcessEnvironment
+    
+    fs *filesystem.Filesystem
+}
+```
+
+**Source:** `server/server.go:28-80`
+
+### Server States
+
+Servers can be in one of several operational states:
+
+- `ProcessOfflineState` - Server is stopped
+- `ProcessStartingState` - Server is starting up
+- `ProcessRunningState` - Server is running
+- `ProcessStoppingState` - Server is shutting down
+
+**Source:** `environment/stats.go`
+
+## Power Management
+
+### Power Actions
+
+Wings supports four power actions:
+
+```go
+const (
+    PowerActionStart     = "start"
+    PowerActionStop      = "stop"
+    PowerActionRestart   = "restart"
+    PowerActionTerminate = "kill"
+)
+```
+
+**Source:** `server/power.go:24-29`
+
+### Executing Power Actions
+
+Power actions are processed through a locking mechanism to prevent race conditions:
+
+```go
+func (s *Server) HandlePowerAction(action PowerAction, waitSeconds ...int) error
+```
+
+**Features:**
+- Exclusive lock prevents concurrent power actions
+- Configurable wait timeout for lock acquisition
+- Terminate action bypasses lock for emergency stops
+- Blocks actions during install/transfer/restore operations
+
+**Source:** `server/power.go:56-167`
+
+### API Endpoint
+
+<CodeGroup>
+```bash Request
+curl -X POST http://localhost:8080/api/servers/{server}/power \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "action": "start",
+    "wait_seconds": 30
+  }'
+```
+
+```json Response
+HTTP/1.1 202 Accepted
+```
+</CodeGroup>
+
+**Valid Actions:** `start`, `stop`, `restart`, `kill`
+
+**Wait Seconds:** Time to wait for power lock (0-300 seconds, default 30)
+
+**Source:** `router/router_server.go:53-105`
+
+### Pre-Start Process
+
+Before starting a server, Wings performs several checks:
+
+```go
+func (s *Server) onBeforeStart() error {
+    // 1. Sync with Panel
+    s.Sync()
+    
+    // 2. Check suspension status
+    if s.IsSuspended() {
+        return ErrSuspended
+    }
+    
+    // 3. Check disk space
+    s.Filesystem().HasSpaceErr(false)
+    
+    // 4. Update configuration files
+    s.UpdateConfigurationFiles()
+    
+    // 5. Fix file permissions (if enabled)
+    s.Filesystem().Chown("/")
+}
+```
+
+**Source:** `server/power.go:171-219`
+
+## Installation & Reinstallation
+
+### Installation Process
+
+Servers are installed using Docker containers that run installation scripts:
+
+```go
+func (s *Server) Install() error
+func (s *Server) Reinstall() error
+```
+
+**Source:** `server/install.go:33-94`
+
+### Installation Steps
+
+1. **Fetch Installation Script** - Retrieved from Panel
+2. **Pull Container Image** - Downloads Docker image for installer
+3. **Write Script to Disk** - Script written to temporary directory
+4. **Create Container** - Installation container created with:
+   - Server files mounted at `/mnt/server`
+   - Install script mounted at `/mnt/install`
+   - Environment variables configured
+5. **Execute Script** - Container runs installation commands
+6. **Stream Output** - Console output streamed to websocket
+7. **Cleanup** - Container and temp files removed
+
+**Source:** `server/install.go:178-495`
+
+### API Endpoints
+
+#### Install Server
+
+```bash
+POST /api/servers/{server}/install
+```
+
+Triggers initial installation process.
+
+**Source:** `router/router_server.go:153-169`
+
+#### Reinstall Server
+
+```bash
+POST /api/servers/{server}/reinstall
+```
+
+Re-runs installation without removing existing files.
+
+**Source:** `router/router_server.go:172-189`
+
+### Installation Container Configuration
+
+```go
+conf := &container.Config{
+    Hostname:     "installer",
+    Cmd:          []string{ip.Script.Entrypoint, "/mnt/install/install.sh"},
+    Image:        ip.Script.ContainerImage,
+    Env:          ip.Server.GetEnvironmentVariables(),
+    Labels: map[string]string{
+        "Service":       "Pterodactyl",
+        "ContainerType": "server_installer",
+    },
+}
+```
+
+**Source:** `server/install.go:399-413`
+
+### Resource Limits
+
+Installation containers use higher limits than server runtime:
+
+```go
+func (ip *InstallationProcess) resourceLimits() container.Resources {
+    limits := config.Get().Docker.InstallerLimits
+    
+    // Use higher of installer limits or server limits
+    if cfg.MemoryLimit < limits.Memory {
+        cfg.MemoryLimit = limits.Memory
+    }
+    if cfg.CpuLimit < limits.Cpu {
+        cfg.CpuLimit = limits.Cpu
+    }
+}
+```
+
+**Source:** `server/install.go:524-550`
+
+## Console Access
+
+### Sending Commands
+
+Commands can be sent to running servers:
+
+```bash
+POST /api/servers/{server}/commands
+```
+
+<CodeGroup>
+```bash Request
+curl -X POST http://localhost:8080/api/servers/{server}/commands \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "commands": [
+      "say Hello World",
+      "save-all"
+    ]
+  }'
+```
+
+```json Response
+HTTP/1.1 204 No Content
+```
+</CodeGroup>
+
+**Source:** `router/router_server.go:108-136`
+
+### Reading Logs
+
+Retrieve server console output:
+
+```bash
+GET /api/servers/{server}/logs?size=100
+```
+
+<CodeGroup>
+```bash Request
+curl http://localhost:8080/api/servers/{server}/logs?size=100 \
+  -H "Authorization: Bearer <token>"
+```
+
+```json Response
+{
+  "data": [
+    "[10:30:45] [Server thread/INFO]: Starting minecraft server",
+    "[10:30:46] [Server thread/INFO]: Loading properties",
+    "[10:30:47] [Server thread/INFO]: Done! For help, type \"help\""
+  ]
+}
+```
+</CodeGroup>
+
+**Source:** `router/router_server.go:26-43`
+
+### Console Throttling
+
+Wings implements console output throttling to prevent spam:
+
+```go
+type ConsoleThrottle struct {
+    limit  *system.Rate
+    lock   *system.Locker
+    strike func()
+}
+```
+
+When throttle is exceeded:
+```
+[Wings Daemon]: Server is outputting console data too quickly -- throttling...
+```
+
+**Source:** `server/console.go:46-83`
+
+## Server Synchronization
+
+### Sync with Panel
+
+Synchronize server configuration from Panel:
+
+```bash
+POST /api/servers/{server}/sync
+```
+
+This endpoint:
+- Fetches latest configuration from Panel
+- Updates resource limits
+- Applies environment changes
+- Disconnects suspended servers
+
+**Source:** `router/router_server.go:142-150`, `server/server.go:186-216`
+
+### Sync Process
+
+```go
+func (s *Server) Sync() error {
+    // 1. Get configuration from Panel
+    cfg, err := s.client.GetServerConfiguration(s.Context(), s.ID())
+    
+    // 2. Update local configuration
+    s.SyncWithConfiguration(cfg)
+    
+    // 3. Update disk limits
+    s.fs.SetDiskLimit(s.DiskSpace())
+    
+    // 4. Sync environment
+    s.SyncWithEnvironment()
+    
+    // 5. Handle suspension
+    if s.IsSuspended() {
+        s.Websockets().CancelAll()
+        s.Sftp().CancelAll()
+    }
+}
+```
+
+**Source:** `server/server.go:186-216`
+
+## Environment Variables
+
+Servers receive environment variables during startup:
+
+```go
+func (s *Server) GetEnvironmentVariables() []string {
+    out := []string{
+        fmt.Sprintf("TZ=%s", config.Get().System.Timezone),
+        fmt.Sprintf("STARTUP=%s", s.Config().Invocation),
+        fmt.Sprintf("SERVER_MEMORY=%d", s.MemoryLimit()),
+        fmt.Sprintf("SERVER_IP=%s", s.Config().Allocations.DefaultMapping.Ip),
+        fmt.Sprintf("SERVER_PORT=%d", s.Config().Allocations.DefaultMapping.Port),
+    }
+    // ... custom variables from Panel
+}
+```
+
+**Source:** `server/server.go:151-174`
+
+## Server Deletion
+
+```bash
+DELETE /api/servers/{server}
+```
+
+Deletion process:
+1. Suspend server
+2. Notify websocket clients
+3. Stop running processes
+4. Remove from server manager
+5. Destroy environment
+6. Delete server files
+
+**Source:** `router/router_server.go:192-200`
+
+## Error Handling
+
+### Common Errors
+
+```go
+var (
+    ErrIsRunning            = errors.New("server is running")
+    ErrSuspended            = errors.New("server is suspended")
+    ErrServerIsInstalling   = errors.New("server is installing")
+    ErrServerIsTransferring = errors.New("server is transferring")
+    ErrServerIsRestoring    = errors.New("server is restoring")
+)
+```
+
+Power actions are blocked when server is:
+- Installing
+- Transferring to another node
+- Restoring from backup
+
+**Source:** `server/power.go:57-64`

@@ -1,0 +1,163 @@
+---
+title: Get Server Details
+api: GET /api/servers/:server
+---
+
+Returns detailed information about a single server instance, including its current state, resource utilization, and configuration.
+
+## Authentication
+
+Requires the Wings authentication token in the `Authorization` header:
+
+```
+Authorization: Bearer <token>
+```
+
+## Path Parameters
+
+<ParamField path="server" type="string" required>
+  The UUID of the server
+</ParamField>
+
+## Response
+
+<ResponseField name="state" type="string">
+  Current state of the server. One of: `offline`, `starting`, `running`, `stopping`
+</ResponseField>
+
+<ResponseField name="is_suspended" type="boolean">
+  Whether the server is currently suspended
+</ResponseField>
+
+<ResponseField name="utilization" type="object">
+  Current resource usage statistics
+  
+  <Expandable title="properties">
+    <ResponseField name="state" type="string">
+      Current process state
+    </ResponseField>
+    
+    <ResponseField name="memory_bytes" type="integer">
+      Current memory usage in bytes
+    </ResponseField>
+    
+    <ResponseField name="memory_limit_bytes" type="integer">
+      Memory limit in bytes
+    </ResponseField>
+    
+    <ResponseField name="cpu_absolute" type="number">
+      Absolute CPU usage percentage
+    </ResponseField>
+    
+    <ResponseField name="disk_bytes" type="integer">
+      Current disk usage in bytes
+    </ResponseField>
+    
+    <ResponseField name="network_rx_bytes" type="integer">
+      Network received bytes
+    </ResponseField>
+    
+    <ResponseField name="network_tx_bytes" type="integer">
+      Network transmitted bytes
+    </ResponseField>
+    
+    <ResponseField name="uptime" type="integer">
+      Server uptime in milliseconds
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="configuration" type="object">
+  Server configuration details
+  
+  <Expandable title="properties">
+    <ResponseField name="uuid" type="string">
+      Server UUID
+    </ResponseField>
+    
+    <ResponseField name="suspended" type="boolean">
+      Whether the server is suspended
+    </ResponseField>
+    
+    <ResponseField name="invocation" type="string">
+      The startup command for the server
+    </ResponseField>
+    
+    <ResponseField name="skip_egg_scripts" type="boolean">
+      Whether to skip egg installation scripts
+    </ResponseField>
+    
+    <ResponseField name="build" type="object">
+      Resource limits and constraints
+    </ResponseField>
+    
+    <ResponseField name="container" type="object">
+      Docker container configuration
+    </ResponseField>
+    
+    <ResponseField name="allocations" type="object">
+      Network allocations (IP and ports)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Error Responses
+
+<ResponseField name="404 Not Found">
+  The requested server does not exist on this Wings instance.
+</ResponseField>
+
+## Example Request
+
+```bash
+curl -X GET https://wings.example.com/api/servers/8d3f9a2e-5c7b-4f1e-9d2a-6e8f1c3b5a7d \
+  -H "Authorization: Bearer your-wings-token" \
+  -H "Accept: application/json"
+```
+
+## Example Response
+
+```json
+{
+  "state": "running",
+  "is_suspended": false,
+  "utilization": {
+    "state": "running",
+    "memory_bytes": 536870912,
+    "memory_limit_bytes": 1073741824,
+    "cpu_absolute": 25.5,
+    "disk_bytes": 2147483648,
+    "network_rx_bytes": 1024000,
+    "network_tx_bytes": 512000,
+    "uptime": 3600000
+  },
+  "configuration": {
+    "uuid": "8d3f9a2e-5c7b-4f1e-9d2a-6e8f1c3b5a7d",
+    "suspended": false,
+    "invocation": "java -Xms128M -Xmx1024M -jar server.jar",
+    "skip_egg_scripts": false,
+    "build": {
+      "memory_limit": 1024,
+      "swap": 0,
+      "io_weight": 500,
+      "cpu_limit": 100,
+      "disk_space": 5120,
+      "threads": "0-3"
+    },
+    "container": {
+      "image": "ghcr.io/pterodactyl/yolks:java_17"
+    },
+    "allocations": {
+      "default": {
+        "ip": "0.0.0.0",
+        "port": 25565
+      },
+      "mappings": {}
+    }
+  }
+}
+```
+
+## Source Reference
+
+Implemented in `router/router_server.go:21`

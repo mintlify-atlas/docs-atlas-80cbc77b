@@ -1,0 +1,380 @@
+---
+title: 'API Overview'
+description: 'Understand the Wings API architecture, endpoints, and response formats'
+---
+
+## Introduction
+
+The Pterodactyl Wings API is a RESTful HTTP API built with Go and the Gin framework. It provides programmatic access to server management, file operations, backups, and real-time communication via WebSockets.
+
+<Note>
+All API requests to Wings originate from the Pterodactyl Panel backend. Direct client access is not supported for most endpoints.
+</Note>
+
+## Base URL
+
+The API is accessible at:
+
+```
+http://<wings-host>:<port>/api
+```
+
+Default configuration:
+- **Host**: `0.0.0.0`
+- **Port**: `8080` (configurable in `config.yml`)
+- **SSL**: Optional (configured via `api.ssl` in config)
+
+## API Architecture
+
+### Endpoint Structure
+
+Wings organizes endpoints into logical groups:
+
+#### System Endpoints
+
+```
+POST   /api/update              Update Wings configuration
+GET    /api/system              Get system information
+GET    /api/servers             List all servers
+POST   /api/servers             Create new server
+POST   /api/deauthorize-user    Revoke user WebSocket access
+```
+
+#### Server Management
+
+```
+GET    /api/servers/:server                 Get server details
+DELETE /api/servers/:server                 Delete server
+GET    /api/servers/:server/logs            Get server logs
+POST   /api/servers/:server/power           Control power state
+POST   /api/servers/:server/commands        Send console commands
+POST   /api/servers/:server/install         Trigger installation
+POST   /api/servers/:server/reinstall       Reinstall server
+POST   /api/servers/:server/sync            Sync with Panel
+POST   /api/servers/:server/ws/deny         Deny WebSocket tokens
+```
+
+#### File Management
+
+```
+GET    /api/servers/:server/files/contents           Read file contents
+GET    /api/servers/:server/files/list-directory     List directory
+PUT    /api/servers/:server/files/rename             Rename/move files
+POST   /api/servers/:server/files/copy               Copy file
+POST   /api/servers/:server/files/write              Write file
+POST   /api/servers/:server/files/create-directory   Create directory
+POST   /api/servers/:server/files/delete             Delete files
+POST   /api/servers/:server/files/compress           Compress files
+POST   /api/servers/:server/files/decompress         Decompress archive
+POST   /api/servers/:server/files/chmod              Change permissions
+```
+
+#### Remote Downloads
+
+<Warning>
+Remote download endpoints require `api.disable_remote_download` to be `false` in the Wings configuration.
+</Warning>
+
+```
+GET    /api/servers/:server/files/pull          Get download status
+POST   /api/servers/:server/files/pull          Start remote download
+DELETE /api/servers/:server/files/pull/:download  Cancel download
+```
+
+#### Backup Management
+
+```
+POST   /api/servers/:server/backup                Create backup
+POST   /api/servers/:server/backup/:backup/restore Restore backup
+DELETE /api/servers/:server/backup/:backup        Delete backup
+```
+
+#### Signed URL Endpoints
+
+These endpoints use JWT tokens instead of Bearer authentication:
+
+```
+GET    /download/backup        Download backup (JWT)
+GET    /download/file          Download file (JWT)
+POST   /upload/file            Upload files (JWT)
+GET    /api/servers/:server/ws WebSocket connection (JWT)
+```
+
+#### Server Transfers
+
+```
+POST   /api/transfers                     Receive incoming transfer
+POST   /api/servers/:server/transfer      Initiate outgoing transfer
+DELETE /api/servers/:server/transfer      Cancel outgoing transfer
+DELETE /api/transfers/:server             Cancel incoming transfer
+```
+
+## Response Formats
+
+### Success Responses
+
+All successful responses return JSON with appropriate HTTP status codes:
+
+<ResponseField name="HTTP 200" type="OK">
+Request completed successfully with data returned.
+
+```json
+{
+  "data": [...],
+  "attribute": "value"
+}
+```
+</ResponseField>
+
+<ResponseField name="HTTP 202" type="Accepted">
+Request accepted for background processing.
+
+```json
+// No body - used for async operations like power actions
+```
+</ResponseField>
+
+<ResponseField name="HTTP 204" type="No Content">
+Request completed successfully with no data to return.
+
+```json
+// No response body
+```
+</ResponseField>
+
+### Error Responses
+
+All errors include a unique request ID for troubleshooting:
+
+```json
+{
+  "error": "Error message describing what went wrong",
+  "request_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+#### Common Error Codes
+
+<ResponseField name="400" type="Bad Request">
+Invalid request data or parameters.
+
+```json
+{
+  "error": "The data passed in the request was not in a parsable format. Please try again.",
+  "request_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+</ResponseField>
+
+<ResponseField name="401" type="Unauthorized">
+Missing or invalid authentication headers.
+
+```json
+{
+  "error": "The required authorization heads were not present in the request.",
+  "request_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+</ResponseField>
+
+<ResponseField name="403" type="Forbidden">
+Authentication provided but insufficient permissions.
+
+```json
+{
+  "error": "You are not authorized to access this endpoint.",
+  "request_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+</ResponseField>
+
+<ResponseField name="404" type="Not Found">
+Requested resource does not exist.
+
+```json
+{
+  "error": "The requested resource does not exist on this instance.",
+  "request_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+</ResponseField>
+
+<ResponseField name="422" type="Unprocessable Entity">
+Validation failed on request data.
+
+```json
+{
+  "error": "The data provided in the request could not be validated."
+}
+```
+</ResponseField>
+
+<ResponseField name="500" type="Internal Server Error">
+Unexpected server error occurred.
+
+```json
+{
+  "error": "An unexpected error was encountered while processing this request",
+  "request_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+</ResponseField>
+
+<ResponseField name="502" type="Bad Gateway">
+Server is in invalid state for operation.
+
+```json
+{
+  "error": "Cannot send commands to a stopped server instance.",
+  "request_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+</ResponseField>
+
+<ResponseField name="504" type="Gateway Timeout">
+Request took too long to process.
+
+```json
+{
+  "error": "The server could not process this request in time, please try again.",
+  "request_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+</ResponseField>
+
+### Filesystem-Specific Errors
+
+File operation endpoints may return specialized error messages:
+
+```json
+// File not found
+{
+  "error": "The requested resources was not found on the system.",
+  "request_id": "..."
+}
+
+// File is denylisted
+{
+  "error": "This file cannot be modified: present in egg denylist.",
+  "request_id": "..."
+}
+
+// Target is directory
+{
+  "error": "Cannot perform that action: file is a directory.",
+  "request_id": "..."
+}
+
+// Insufficient disk space
+{
+  "error": "There is not enough disk space available to perform that action.",
+  "request_id": "..."
+}
+
+// Filename too long
+{
+  "error": "Cannot perform that action: file name is too long.",
+  "request_id": "..."
+}
+```
+
+## Rate Limiting
+
+### WebSocket Rate Limits
+
+WebSocket connections enforce multiple rate limits:
+
+<ParamField name="Global Message Limit" type="rate">
+  Maximum 10 messages per 200ms (50 messages/second)
+  
+  Exceeding this limit triggers a throttle warning:
+  ```json
+  {
+    "event": "throttled",
+    "args": ["global"]
+  }
+  ```
+</ParamField>
+
+<ParamField name="Connection Limit" type="count">
+  Maximum 30 concurrent WebSocket connections per server
+  
+  Exceeding returns HTTP 400:
+  ```json
+  {
+    "error": "Too many open websocket connections."
+  }
+  ```
+</ParamField>
+
+<ParamField name="Message Size Limit" type="bytes">
+  - Compressed: 4,096 bytes (4 KB)
+  - Uncompressed: 32,768 bytes (32 KB)
+  
+  Messages exceeding these limits are silently dropped.
+</ParamField>
+
+### Upload Limits
+
+<ParamField name="File Upload Limit" type="MB">
+  Default: 100 MB per file (configurable via `api.upload_limit`)
+  
+  ```json
+  {
+    "error": "File example.zip is larger than the maximum file upload size of 100 MB."
+  }
+  ```
+</ParamField>
+
+## Request Tracking
+
+All API responses include a unique request identifier in the `X-Request-Id` header:
+
+```
+X-Request-Id: 550e8400-e29b-41d4-a716-446655440000
+```
+
+This ID is:
+- Automatically generated for each request
+- Included in error responses
+- Logged for debugging purposes
+- Useful for correlating Panel and Wings logs
+
+## CORS Configuration
+
+Wings sets the following CORS headers:
+
+```
+Access-Control-Allow-Origin: <panel-location>
+Access-Control-Allow-Credentials: true
+Access-Control-Allow-Methods: GET, POST, PATCH, PUT, DELETE, OPTIONS
+Access-Control-Allow-Headers: Accept, Accept-Encoding, Authorization, Cache-Control, Content-Type, Content-Length, Origin, X-Real-IP, X-CSRF-Token
+Access-Control-Max-Age: 7200
+```
+
+<Info>
+The `Access-Control-Allow-Origin` header is dynamically set based on the `panel_location` and `allowed_origins` configuration options.
+</Info>
+
+### Private Network Access
+
+When `allow_cors_private_network` is enabled:
+
+```
+Access-Control-Request-Private-Network: true
+```
+
+This allows CORS requests from private networks (RFC1918) in Chromium-based browsers.
+
+## Trusted Proxies
+
+Wings can be configured to trust specific proxy IP addresses for client IP resolution:
+
+```yaml
+api:
+  trusted_proxies:
+    - 127.0.0.1
+    - 172.16.0.0/12
+```
+
+When properly configured, Wings will use `X-Forwarded-For` headers from trusted proxies to identify the true client IP address.

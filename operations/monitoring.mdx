@@ -1,0 +1,575 @@
+---
+title: Monitoring
+description: Resource monitoring, statistics collection, and performance metrics
+---
+
+Wings continuously monitors server resource usage and provides real-time statistics through websockets and API endpoints.
+
+## Resource Statistics
+
+### Stats Structure
+
+Environment-level statistics:
+
+```go
+type Stats struct {
+    // Memory usage in bytes
+    Memory uint64 `json:"memory_bytes"`
+    
+    // Memory limit in bytes
+    MemoryLimit uint64 `json:"memory_limit_bytes"`
+    
+    // Absolute CPU usage across entire system
+    CpuAbsolute float64 `json:"cpu_absolute"`
+    
+    // Network statistics
+    Network NetworkStats `json:"network"`
+    
+    // Container uptime in milliseconds
+    Uptime int64 `json:"uptime"`
+}
+
+type NetworkStats struct {
+    RxBytes uint64 `json:"rx_bytes"`
+    TxBytes uint64 `json:"tx_bytes"`
+}
+```
+
+**Source:** `environment/stats.go:4-31`
+
+### Resource Usage Structure
+
+Server-level resource tracking:
+
+```go
+type ResourceUsage struct {
+    mu sync.RWMutex
+    
+    // Embedded environment stats
+    environment.Stats
+    
+    // Current server state
+    State *system.AtomicString `json:"state"`
+    
+    // Disk usage in bytes (cached value)
+    Disk int64 `json:"disk_bytes"`
+}
+```
+
+**Source:** `server/resources.go:14-28`
+
+## Statistics Collection
+
+### Getting Server Stats
+
+```go
+func (s *Server) Proc() ResourceUsage {
+    s.resources.mu.Lock()
+    defer s.resources.mu.Unlock()
+    
+    // Update disk usage from cache
+    atomic.StoreInt64(&s.resources.Disk, s.Filesystem().CachedUsage())
+    
+    return s.resources
+}
+```
+
+**Features:**
+- Thread-safe access
+- Automatic disk usage update
+- Returns copy of resource data
+
+**Source:** `server/resources.go:32-39`
+
+### Updating Stats
+
+```go
+func (ru *ResourceUsage) UpdateStats(stats environment.Stats) {
+    ru.mu.Lock()
+    ru.Stats = stats
+    ru.mu.Unlock()
+}
+```
+
+**Called by:** Environment monitoring loops
+
+**Frequency:** Continuously during server operation
+
+**Source:** `server/resources.go:42-46`
+
+## API Endpoints
+
+### Get Server Details
+
+```bash
+GET /api/servers/{server}
+```
+
+<CodeGroup>
+```bash Request
+curl http://localhost:8080/api/servers/{server} \
+  -H "Authorization: Bearer <token>"
+```
+
+```json Response
+{
+  "state": "running",
+  "is_suspended": false,
+  "utilization": {
+    "memory_bytes": 536870912,
+    "memory_limit_bytes": 1073741824,
+    "cpu_absolute": 25.5,
+    "network": {
+      "rx_bytes": 1048576,
+      "tx_bytes": 524288
+    },
+    "uptime": 3600000,
+    "state": "running",
+    "disk_bytes": 2147483648
+  },
+  "configuration": {
+    "uuid": "8a3e7e6f-2b4c-4d9e-8f7a-1c2d3e4f5a6b",
+    "suspended": false,
+    "...": "..."
+  }
+}
+```
+</CodeGroup>
+
+**Source:** `router/router_server.go:21-23`
+
+### API Response Structure
+
+```go
+type APIResponse struct {
+    State         string        `json:"state"`
+    IsSuspended   bool          `json:"is_suspended"`
+    Utilization   ResourceUsage `json:"utilization"`
+    Configuration Configuration `json:"configuration"`
+}
+
+func (s *Server) ToAPIResponse() APIResponse {
+    return APIResponse{
+        State:         s.Environment.State(),
+        IsSuspended:   s.IsSuspended(),
+        Utilization:   s.Proc(),
+        Configuration: *s.Config(),
+    }
+}
+```
+
+**Source:** `server/server.go:373-389`
+
+## Real-Time Monitoring
+
+### Websocket Stats Events
+
+Stats are published to websockets when updated:
+
+```go
+s.Events().Publish(StatsEvent, s.Proc())
+```
+
+**Event Name:** `stats`
+
+**Frequency:** Continuous during server operation
+
+**Source:** Referenced in `server/server.go:334`
+
+### State Change Events
+
+```go
+func (s *Server) OnStateChange() {
+    prevState := s.resources.State.Load()
+    st := s.Environment.State()
+    
+    // Update tracked state
+    s.resources.State.Store(st)
+    
+    // Publish state change event
+    if prevState != s.Environment.State() {
+        s.Log().WithField("status", st).Debug("saw server status change event")
+        s.Events().Publish(StatusEvent, st)
+    }
+    
+    // Reset stats when offline
+    if st == environment.ProcessOfflineState {
+        s.resources.Reset()
+        s.Events().Publish(StatsEvent, s.Proc())
+    }
+}
+```
+
+**Events Published:**
+- `status` - When server state changes
+- `stats` - When server goes offline (reset to 0)
+
+**Source:** `server/server.go:317-359`
+
+## Resource Metrics
+
+### Memory Tracking
+
+**Memory Usage:**
+```go
+Memory uint64 `json:"memory_bytes"`
+```
+
+**Memory Limit:**
+```go
+MemoryLimit uint64 `json:"memory_limit_bytes"`
+```
+
+**Calculation:**
+- Calculated from container stats
+- Includes all memory used by container
+- Compared against configured limit
+
+**Source:** `environment/stats.go:9-14`
+
+### CPU Tracking
+
+**CPU Absolute:**
+```go
+CpuAbsolute float64 `json:"cpu_absolute"`
+```
+
+**Description:**
+- Percentage of total system CPU used
+- Not limited to server's CPU allocation
+- Can exceed 100% on multi-core systems
+
+**Example Values:**
+- `25.5` - Using 25.5% of one CPU core
+- `150.0` - Using 1.5 CPU cores fully
+- `400.0` - Using 4 CPU cores fully
+
+**Source:** `environment/stats.go:18`
+
+### Network Tracking
+
+**Received Bytes:**
+```go
+RxBytes uint64 `json:"rx_bytes"`
+```
+
+**Transmitted Bytes:**
+```go
+TxBytes uint64 `json:"tx_bytes"`
+```
+
+**Measurement:**
+- Total bytes since container start
+- Cumulative counters (not rates)
+- Resets when container restarts
+
+**Source:** `environment/stats.go:27-30`
+
+### Disk Tracking
+
+**Disk Usage:**
+```go
+Disk int64 `json:"disk_bytes"`
+```
+
+**Characteristics:**
+- Cached value from filesystem
+- Updated when `Proc()` is called
+- Not real-time (for performance)
+
+**Update Method:**
+```go
+atomic.StoreInt64(&s.resources.Disk, s.Filesystem().CachedUsage())
+```
+
+**Source:** `server/resources.go:36`
+
+### Uptime Tracking
+
+**Uptime:**
+```go
+Uptime int64 `json:"uptime"`
+```
+
+**Unit:** Milliseconds
+
+**Description:** Time since container started
+
+**Source:** `environment/stats.go:24`
+
+## Resource Reset
+
+### Reset on Stop
+
+```go
+func (ru *ResourceUsage) Reset() {
+    ru.mu.Lock()
+    defer ru.mu.Unlock()
+    
+    ru.Memory = 0
+    ru.CpuAbsolute = 0
+    ru.Uptime = 0
+    ru.Network.TxBytes = 0
+    ru.Network.RxBytes = 0
+}
+```
+
+**When Called:**
+- Server stops
+- Server crashes
+- Container is destroyed
+
+**Not Reset:**
+- `Disk` - Persists across restarts
+- `State` - Updated to offline state
+- `MemoryLimit` - Configuration value
+
+**Source:** `server/resources.go:50-59`
+
+## Performance Monitoring
+
+### Server State Tracking
+
+```go
+func (s *Server) IsRunning() bool {
+    st := s.Environment.State()
+    return st == environment.ProcessRunningState || st == environment.ProcessStartingState
+}
+```
+
+**States:**
+- `ProcessOfflineState` - Server stopped
+- `ProcessStartingState` - Server starting
+- `ProcessRunningState` - Server running
+- `ProcessStoppingState` - Server stopping
+
+**Source:** `server/server.go:364-368`
+
+### Atomic State Storage
+
+```go
+State *system.AtomicString `json:"state"`
+```
+
+**Benefits:**
+- Thread-safe reads/writes
+- No mutex needed for state checks
+- Concurrent access safe
+
+**Source:** `server/resources.go:21`
+
+## Monitoring Best Practices
+
+### Reading Statistics
+
+**Good:**
+```go
+// Use Proc() to get current stats
+stats := server.Proc()
+if stats.Memory > stats.MemoryLimit {
+    // Handle out of memory
+}
+```
+
+**Avoid:**
+```go
+// Don't access s.resources directly
+// This bypasses mutex protection and disk update
+memory := server.resources.Memory // Unsafe!
+```
+
+### Websocket Monitoring
+
+Subscribe to stats events for real-time monitoring:
+
+```javascript
+ws.addEventListener('message', (event) => {
+  const data = JSON.parse(event.data);
+  
+  if (data.event === 'stats') {
+    const stats = JSON.parse(data.args[0]);
+    console.log('Memory:', stats.memory_bytes);
+    console.log('CPU:', stats.cpu_absolute);
+    console.log('Network RX:', stats.network.rx_bytes);
+    console.log('Network TX:', stats.network.tx_bytes);
+  }
+});
+```
+
+### Polling Interval
+
+For API polling:
+
+**Recommended:**
+- 1-5 seconds for active monitoring
+- 10-30 seconds for dashboards
+- 60+ seconds for historical data
+
+**Avoid:**
+- Sub-second polling (use websockets)
+- Polling stopped servers
+- Excessive concurrent requests
+
+## Metric Visualization
+
+### Memory Usage
+
+```javascript
+const memoryPercent = (stats.memory_bytes / stats.memory_limit_bytes) * 100;
+console.log(`Memory: ${memoryPercent.toFixed(1)}%`);
+```
+
+### CPU Usage
+
+```javascript
+// CPU is already a percentage
+console.log(`CPU: ${stats.cpu_absolute.toFixed(1)}%`);
+```
+
+### Network Rate
+
+Calculate network rate from deltas:
+
+```javascript
+let lastStats = null;
+let lastTime = null;
+
+function updateNetworkRate(stats) {
+  const now = Date.now();
+  
+  if (lastStats && lastTime) {
+    const timeDelta = (now - lastTime) / 1000; // seconds
+    const rxDelta = stats.network.rx_bytes - lastStats.network.rx_bytes;
+    const txDelta = stats.network.tx_bytes - lastStats.network.tx_bytes;
+    
+    const rxRate = rxDelta / timeDelta; // bytes/sec
+    const txRate = txDelta / timeDelta; // bytes/sec
+    
+    console.log(`RX: ${(rxRate / 1024).toFixed(1)} KB/s`);
+    console.log(`TX: ${(txRate / 1024).toFixed(1)} KB/s`);
+  }
+  
+  lastStats = stats;
+  lastTime = now;
+}
+```
+
+### Disk Usage
+
+```javascript
+const diskGB = stats.disk_bytes / (1024 * 1024 * 1024);
+console.log(`Disk: ${diskGB.toFixed(2)} GB`);
+```
+
+### Uptime
+
+```javascript
+const uptimeSeconds = stats.uptime / 1000;
+const hours = Math.floor(uptimeSeconds / 3600);
+const minutes = Math.floor((uptimeSeconds % 3600) / 60);
+console.log(`Uptime: ${hours}h ${minutes}m`);
+```
+
+## Integration Examples
+
+### Prometheus Metrics
+
+Convert Wings stats to Prometheus format:
+
+```python
+# pseudo-code
+for server in wings.servers:
+    stats = server.proc()
+    
+    prometheus.gauge(f'server_memory_bytes', stats.memory_bytes, 
+                     labels={'server': server.id})
+    prometheus.gauge(f'server_cpu_percent', stats.cpu_absolute,
+                     labels={'server': server.id})
+    prometheus.counter(f'server_network_rx_bytes', stats.network.rx_bytes,
+                       labels={'server': server.id})
+    prometheus.counter(f'server_network_tx_bytes', stats.network.tx_bytes,
+                       labels={'server': server.id})
+```
+
+### Grafana Dashboards
+
+Query Wings API for metrics:
+
+```sql
+-- Example Grafana query (pseudo-code)
+SELECT
+  time,
+  server_id,
+  memory_bytes / memory_limit_bytes * 100 as memory_percent,
+  cpu_absolute,
+  network_rx_bytes,
+  network_tx_bytes
+FROM wings_stats
+WHERE time > now() - 1h
+```
+
+### Alert Thresholds
+
+Example monitoring alerts:
+
+```yaml
+# Memory usage > 90%
+- alert: HighMemoryUsage
+  expr: (server_memory_bytes / server_memory_limit_bytes) > 0.9
+  for: 5m
+
+# CPU usage > 200% (2 cores)
+- alert: HighCPUUsage
+  expr: server_cpu_absolute > 200
+  for: 10m
+
+# Server offline
+- alert: ServerOffline
+  expr: server_state == "offline"
+  for: 1m
+```
+
+## Troubleshooting
+
+### Stats Not Updating
+
+**Check:**
+1. Server is running (`state === "running"`)
+2. Websocket connection is active
+3. No errors in Wings logs
+4. Container is healthy in Docker
+
+### Incorrect Memory Values
+
+**Reasons:**
+- Container overhead included
+- Shared memory counted
+- Cache/buffers included
+
+**Verify:**
+```bash
+docker stats {container_id}
+```
+
+### High CPU Values
+
+**Expected:**
+- Values can exceed 100%
+- Each core can contribute 100%
+- 400% on 4-core system is normal
+
+**Investigate if:**
+- Sustained over limit
+- Server unresponsive
+- Other processes affected
+
+### Network Counters Reset
+
+**Causes:**
+- Container restart
+- Server reinstall
+- Network driver reload
+
+**Expected behavior:**
+- Counters are cumulative
+- Reset on container recreation

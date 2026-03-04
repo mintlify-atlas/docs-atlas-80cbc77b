@@ -1,0 +1,170 @@
+---
+title: 'Initiate Server Transfer'
+description: 'Start transferring a server to another node'
+---
+
+## POST /api/servers/:server/transfer
+
+Initiates an outgoing server transfer to a destination node. This endpoint archives the server data and streams it to the target node.
+
+<Warning>
+  The server must be offline before the transfer can begin. The transfer process will automatically stop the server if it's running.
+</Warning>
+
+### Path Parameters
+
+<ParamField path="server" type="string" required>
+  The UUID of the server to transfer
+</ParamField>
+
+### Request Body
+
+<ParamField body="url" type="string" required>
+  The destination node's transfer endpoint URL where the archive will be sent
+</ParamField>
+
+<ParamField body="token" type="string" required>
+  JWT bearer token for authenticating with the destination node
+</ParamField>
+
+<ParamField body="server" type="object" required>
+  Server configuration details for the destination node
+  
+  <Expandable title="properties">
+    <ParamField body="uuid" type="string" required>
+      The server's UUID
+    </ParamField>
+    
+    <ParamField body="start_on_completion" type="boolean">
+      Whether to start the server after transfer completes (default: false)
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+### Response
+
+Returns `202 Accepted` when the transfer is successfully initiated. The transfer runs asynchronously in the background.
+
+### Error Responses
+
+<ResponseField name="409 Conflict" type="error">
+  A transfer is already in progress for this server
+  
+  ```json
+  {
+    "error": "A transfer is already in progress for this server."
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="500 Internal Server Error" type="error">
+  Failed to stop the server before initiating transfer
+</ResponseField>
+
+### Transfer Process
+
+When you initiate a transfer, Wings performs the following steps:
+
+<Steps>
+  <Step title="Server Stop">
+    Stops the server if it's currently running (waits up to 15 seconds)
+  </Step>
+  
+  <Step title="Archive Creation">
+    Creates a compressed archive of all server files
+  </Step>
+  
+  <Step title="Stream to Destination">
+    Streams the archive to the destination node with progress updates every 5 seconds
+  </Step>
+  
+  <Step title="Checksum Verification">
+    Sends a SHA-256 checksum for the destination to verify data integrity
+  </Step>
+</Steps>
+
+<Note>
+  The source node does **not** send a success status to the panel. Only the destination node reports success. If the transfer fails, the source node notifies the panel to reset the transfer state.
+</Note>
+
+### Example Request
+
+```bash cURL
+curl -X POST https://wings.example.com/api/servers/12345678-1234-1234-1234-123456789012/transfer \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://destination.example.com/api/transfers",
+    "token": "Bearer DESTINATION_JWT_TOKEN",
+    "server": {
+      "uuid": "12345678-1234-1234-1234-123456789012",
+      "start_on_completion": false
+    }
+  }'
+```
+
+```javascript JavaScript
+const response = await fetch(
+  'https://wings.example.com/api/servers/12345678-1234-1234-1234-123456789012/transfer',
+  {
+    method: 'POST',
+    headers: {
+      'Authorization': 'Bearer YOUR_TOKEN',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      url: 'https://destination.example.com/api/transfers',
+      token: 'Bearer DESTINATION_JWT_TOKEN',
+      server: {
+        uuid: '12345678-1234-1234-1234-123456789012',
+        start_on_completion: false
+      }
+    })
+  }
+);
+```
+
+```python Python
+import requests
+
+response = requests.post(
+    'https://wings.example.com/api/servers/12345678-1234-1234-1234-123456789012/transfer',
+    headers={
+        'Authorization': 'Bearer YOUR_TOKEN',
+        'Content-Type': 'application/json'
+    },
+    json={
+        'url': 'https://destination.example.com/api/transfers',
+        'token': 'Bearer DESTINATION_JWT_TOKEN',
+        'server': {
+            'uuid': '12345678-1234-1234-1234-123456789012',
+            'start_on_completion': False
+        }
+    }
+)
+```
+
+### Example Response
+
+```http
+HTTP/1.1 202 Accepted
+```
+
+### Monitoring Transfer Progress
+
+You can monitor transfer progress through the server's WebSocket connection. The transfer system publishes events:
+
+- **Transfer logs**: Real-time progress messages (upload percentage, status updates)
+- **Transfer status**: Current status (pending, processing, cancelling, cancelled, failed, completed)
+
+### Related Endpoints
+
+<CardGroup cols={2}>
+  <Card title="Receive Transfer" icon="download" href="/api/transfers/status">
+    Receive an incoming server transfer
+  </Card>
+  
+  <Card title="Cancel Transfer" icon="xmark" href="/api/transfers/cancel">
+    Cancel an outgoing server transfer
+  </Card>
+</CardGroup>

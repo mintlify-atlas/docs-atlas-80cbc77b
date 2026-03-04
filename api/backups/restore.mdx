@@ -1,0 +1,196 @@
+---
+title: "Restore Backup"
+description: "Restore a server from a backup archive"
+---
+
+## Endpoint
+
+```
+POST /api/servers/:server/backup/:backup/restore
+```
+
+## Authentication
+
+Requires Bearer token authentication via the `Authorization` header.
+
+## Path Parameters
+
+<ParamField path="server" type="string" required>
+  The UUID of the server
+</ParamField>
+
+<ParamField path="backup" type="string" required>
+  The UUID of the backup to restore
+</ParamField>
+
+## Request Body
+
+<ParamField body="adapter" type="string" required>
+  Backup storage adapter. Valid values: `wings` (local) or `s3`
+</ParamField>
+
+<ParamField body="truncate_directory" type="boolean" default="false">
+  Whether to delete all existing files before restoring the backup
+</ParamField>
+
+<ParamField body="download_url" type="string">
+  Required for S3 backups. Pre-signed URL to download the backup from S3.
+</ParamField>
+
+## Response
+
+Returns `202 Accepted` immediately. The restoration process continues asynchronously in the background.
+
+## Example Request
+
+<CodeGroup>
+```bash cURL - Local Backup
+curl -X POST "https://wings.example.com/api/servers/d3aac109-f0fc-4674-b5bc-199bb50e6b88/backup/550e8400-e29b-41d4-a716-446655440000/restore" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "adapter": "wings",
+    "truncate_directory": true
+  }'
+```
+
+```bash cURL - S3 Backup
+curl -X POST "https://wings.example.com/api/servers/d3aac109-f0fc-4674-b5bc-199bb50e6b88/backup/550e8400-e29b-41d4-a716-446655440000/restore" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "adapter": "s3",
+    "truncate_directory": true,
+    "download_url": "https://s3.amazonaws.com/bucket/backup-550e8400.tar.gz?presigned-params"
+  }'
+```
+
+```javascript JavaScript
+await fetch(
+  'https://wings.example.com/api/servers/d3aac109-f0fc-4674-b5bc-199bb50e6b88/backup/550e8400-e29b-41d4-a716-446655440000/restore',
+  {
+    method: 'POST',
+    headers: {
+      'Authorization': 'Bearer YOUR_TOKEN',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      adapter: 'wings',
+      truncate_directory: false
+    })
+  }
+);
+```
+
+```python Python
+import requests
+
+requests.post(
+    'https://wings.example.com/api/servers/d3aac109-f0fc-4674-b5bc-199bb50e6b88/backup/550e8400-e29b-41d4-a716-446655440000/restore',
+    headers={'Authorization': 'Bearer YOUR_TOKEN'},
+    json={
+        'adapter': 'wings',
+        'truncate_directory': True
+    }
+)
+```
+</CodeGroup>
+
+## Restoration Process
+
+<Steps>
+  <Step title="Server State Update">
+    Server is marked as "restoring" to prevent modifications during restoration.
+  </Step>
+  
+  <Step title="Optional Truncation">
+    If `truncate_directory: true`, all existing files in the server directory are deleted.
+    
+    <Warning>
+      This is irreversible. All current server data will be lost.
+    </Warning>
+  </Step>
+  
+  <Step title="Backup Retrieval">
+    **Local (wings) adapter:**
+    - Locates backup in configured backup directory
+    - Verifies backup file exists
+    
+    **S3 adapter:**
+    - Downloads backup from provided `download_url`
+    - Streams download directly to extraction (no disk buffering)
+    - Validates Content-Type is `application/x-gzip` or `application/gzip`
+  </Step>
+  
+  <Step title="Archive Extraction">
+    - Extracts tar.gz archive to server directory
+    - Preserves file permissions and timestamps
+    - Overwrites existing files
+  </Step>
+  
+  <Step title="Completion">
+    - Server state updated to normal
+    - WebSocket event published
+    - Panel notified of completion
+  </Step>
+</Steps>
+
+## WebSocket Events
+
+Restoration progress is published via WebSocket:
+
+```json
+{
+  "event": "daemon message",
+  "args": ["Starting restoration process for server backup using local driver"]
+}
+```
+
+```json
+{
+  "event": "backup restore completed",
+  "args": [""]
+}
+```
+
+## Behavior
+
+- Restoration runs asynchronously in the background
+- Server state is set to "restoring" during the process
+- Existing files are preserved unless `truncate_directory: true`
+- Files in the backup overwrite existing files with the same path
+- Directory structure from backup is recreated
+- Server remains stopped during restoration (if running, stop it first)
+
+<Note>
+  The restoration endpoint returns immediately with `202 Accepted`. Use WebSocket events to monitor progress.
+</Note>
+
+## Error Responses
+
+<AccordionGroup>
+  <Accordion title="400 Bad Request">
+    Missing `download_url` for S3 backup or invalid Content-Type
+  </Accordion>
+  <Accordion title="401 Unauthorized">
+    Missing or invalid Bearer token
+  </Accordion>
+  <Accordion title="404 Not Found">
+    Server or backup does not exist
+  </Accordion>
+  <Accordion title="500 Internal Server Error">
+    Failed to restore backup (corrupted archive, disk full, etc.)
+  </Accordion>
+</AccordionGroup>
+
+## Best Practices
+
+1. **Always stop the server** before restoring to prevent file conflicts
+2. **Use `truncate_directory: true`** for complete restoration to avoid mixing old and new files
+3. **Create a backup before restoring** to have a rollback option
+4. **Monitor disk space** - restoration requires temporary space for extraction
+5. **Verify backup integrity** in the Panel before restoring
+
+## Source Reference
+
+Implementation: `router/router_server_backup.go:68-172` (postServerRestoreBackup function)

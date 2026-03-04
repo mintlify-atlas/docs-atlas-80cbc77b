@@ -1,0 +1,134 @@
+---
+title: "Decompress Archive"
+description: "Extract a compressed archive file on the server"
+---
+
+## Endpoint
+
+```
+POST /api/servers/:server/files/decompress
+```
+
+## Authentication
+
+Requires Bearer token authentication via the `Authorization` header.
+
+## Path Parameters
+
+<ParamField path="server" type="string" required>
+  The UUID of the server
+</ParamField>
+
+## Request Body
+
+<ParamField body="root" type="string" required>
+  The directory where the archive is located (files will be extracted relative to this)
+</ParamField>
+
+<ParamField body="file" type="string" required>
+  The archive file to decompress (relative to root)
+</ParamField>
+
+## Response
+
+Returns `204 No Content` on success.
+
+## Example Request
+
+<CodeGroup>
+```bash cURL
+curl -X POST "https://wings.example.com/api/servers/d3aac109-f0fc-4674-b5bc-199bb50e6b88/files/decompress" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "root": "/",
+    "file": "backup.tar.gz"
+  }'
+```
+
+```javascript JavaScript
+await fetch(
+  'https://wings.example.com/api/servers/d3aac109-f0fc-4674-b5bc-199bb50e6b88/files/decompress',
+  {
+    method: 'POST',
+    headers: {
+      'Authorization': 'Bearer YOUR_TOKEN',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      root: '/backups',
+      file: 'world-backup.zip'
+    })
+  }
+);
+```
+
+```python Python
+import requests
+
+requests.post(
+    'https://wings.example.com/api/servers/d3aac109-f0fc-4674-b5bc-199bb50e6b88/files/decompress',
+    headers={'Authorization': 'Bearer YOUR_TOKEN'},
+    json={
+        'root': '/',
+        'file': 'plugin-pack.tar.gz'
+    }
+)
+```
+</CodeGroup>
+
+## Supported Archive Formats
+
+Wings supports automatic format detection and extraction of:
+
+- `.tar.gz`, `.tgz` - Gzip-compressed tar archives
+- `.tar` - Uncompressed tar archives  
+- `.zip` - ZIP archives
+- `.rar` - RAR archives
+- `.7z` - 7-Zip archives
+- `.tar.bz2`, `.tbz2` - Bzip2-compressed tar archives
+- `.tar.xz`, `.txz` - XZ-compressed tar archives
+- `.tar.lz` - Lzip-compressed tar archives
+
+## Behavior
+
+- Archive format is automatically detected by file extension
+- Files are extracted to the same directory as the archive
+- Existing files with the same name are **overwritten**
+- Directory structure within the archive is preserved
+- File permissions and timestamps are preserved
+- Archive file is **automatically deleted** after successful extraction
+- Path traversal is prevented (archives cannot extract outside server directory)
+
+<Warning>
+  The archive file is automatically deleted after extraction. If you need to keep the original archive, create a copy before decompressing.
+</Warning>
+
+## Error Responses
+
+<AccordionGroup>
+  <Accordion title="400 Bad Request">
+    Unsupported archive format
+  </Accordion>
+  <Accordion title="401 Unauthorized">
+    Missing or invalid Bearer token
+  </Accordion>
+  <Accordion title="404 Not Found">
+    Server or archive file does not exist
+  </Accordion>
+  <Accordion title="500 Internal Server Error">
+    Failed to extract archive (corrupted archive, disk full, permission error, etc.)
+  </Accordion>
+</AccordionGroup>
+
+## Use Cases
+
+- Restore world backups
+- Install plugin packs
+- Extract uploaded archives
+- Restore server snapshots
+- Deploy pre-packaged configurations
+
+## Source Reference
+
+Implementation: `router/router_server_files.go` (postServerDecompressFiles function)

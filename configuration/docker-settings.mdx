@@ -1,0 +1,323 @@
+---
+title: Docker Settings
+description: Configure Docker container settings, networking, and resource limits
+---
+
+## Network Configuration
+
+Wings creates and manages a dedicated Docker network for game server containers. This network is created automatically if it doesn't exist.
+
+### Basic Network Settings
+
+```yaml
+docker:
+  network:
+    name: pterodactyl_nw
+    driver: bridge
+    network_mode: pterodactyl_nw
+```
+
+**Defaults:**
+- `name`: `pterodactyl_nw`
+- `driver`: `bridge`
+- `network_mode`: `pterodactyl_nw`
+
+### Network Interface
+
+```yaml
+docker:
+  network:
+    interface: 172.18.0.1
+```
+
+**Default:** `172.18.0.1`
+
+The interface address used to create the network. Must not conflict with other Docker networks or system interfaces.
+
+### DNS Settings
+
+```yaml
+docker:
+  network:
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
+```
+
+**Default:** `["1.1.1.1", "1.0.0.1"]` (Cloudflare DNS)
+
+DNS servers used by containers.
+
+### Network Interfaces (IPv4/IPv6)
+
+```yaml
+docker:
+  network:
+    interfaces:
+      v4:
+        subnet: 172.18.0.0/16
+        gateway: 172.18.0.1
+      v6:
+        subnet: fdba:17c8:6c94::/64
+        gateway: fdba:17c8:6c94::1011
+```
+
+**IPv4 Defaults:**
+- `subnet`: `172.18.0.0/16`
+- `gateway`: `172.18.0.1`
+
+**IPv6 Defaults:**
+- `subnet`: `fdba:17c8:6c94::/64`
+- `gateway`: `fdba:17c8:6c94::1011`
+
+### Advanced Network Options
+
+```yaml
+docker:
+  network:
+    ispn: false
+    is_internal: false
+    enable_icc: true
+    network_mtu: 1500
+```
+
+**Defaults:**
+- `ispn`: `false`
+- `is_internal`: `false` - Whether the network is internal (no external access)
+- `enable_icc`: `true` - Enable Inter-Container Communication
+- `network_mtu`: `1500` - Maximum Transmission Unit size
+
+## Container Configuration
+
+### Domain Name
+
+```yaml
+docker:
+  domainname: ""
+```
+
+**Default:** Empty string
+
+Docker domain name for all containers.
+
+### Tmpfs Size
+
+```yaml
+docker:
+  tmpfs_size: 100
+```
+
+**Default:** `100` MB
+
+Size of the `/tmp` directory mounted into containers. Uses host system memory.
+
+<Warning>
+Avoid allocating too much tmpfs size as it uses the host's RAM and Wings doesn't track this usage.
+</Warning>
+
+### Container PID Limit
+
+```yaml
+docker:
+  container_pid_limit: 512
+```
+
+**Default:** `512`
+
+Maximum number of processes that can be active in a container simultaneously.
+
+<Note>
+This is a security feature to prevent malicious processes from exhausting host PIDs in shared-hosting environments.
+</Note>
+
+## User Namespace Mode
+
+```yaml
+docker:
+  userns_mode: ""
+```
+
+**Default:** Empty string (uses daemon's configuration)
+
+**Options:**
+- Empty string - Use daemon's user namespace remapping configuration
+- `host` - Disable user namespace remapping for Pterodactyl containers
+
+Sets the user namespace mode when user namespace remapping is enabled in Docker.
+
+## Installer Limits
+
+```yaml
+docker:
+  installer_limits:
+    memory: 1024
+    cpu: 100
+```
+
+**Defaults:**
+- `memory`: `1024` MB
+- `cpu`: `100` (100% of one core)
+
+Resource limits for server installation containers. The higher value between these limits and the server's configured limits is used.
+
+## Memory Overhead
+
+```yaml
+docker:
+  overhead:
+    override: false
+    default_multiplier: 1.05
+    multipliers:
+      2048: 1.15
+      4096: 1.10
+```
+
+**Defaults:**
+- `override`: `false`
+- `default_multiplier`: `1.05` (5% overhead)
+
+Memory overhead multiplier to prevent issues with software like the JVM exceeding memory limits.
+
+### Default Multipliers (when override is false)
+
+- Memory ≤ 2048 MB: **1.15** (15% overhead)
+- Memory ≤ 4096 MB: **1.10** (10% overhead)
+- Memory > 4096 MB: **1.05** (5% overhead)
+
+### Custom Multipliers
+
+To define custom overhead multipliers:
+
+```yaml
+docker:
+  overhead:
+    override: true
+    default_multiplier: 1.05
+    multipliers:
+      1024: 1.20  # 20% overhead for <= 1024 MB
+      2048: 1.15  # 15% overhead for <= 2048 MB
+      4096: 1.10  # 10% overhead for <= 4096 MB
+```
+
+## Container Logging
+
+```yaml
+docker:
+  log_config:
+    type: local
+    config:
+      max-size: "5m"
+      max-file: "1"
+      compress: "false"
+      mode: "non-blocking"
+```
+
+**Defaults:**
+- `type`: `local`
+- `max-size`: `5m` (5 megabytes)
+- `max-file`: `1` (keep 1 log file)
+- `compress`: `false`
+- `mode`: `non-blocking`
+
+Docker logging driver configuration for containers.
+
+**Common log types:**
+- `local` - Docker's local logging driver (recommended)
+- `json-file` - JSON file logging
+- `none` - Disable logging
+- `syslog` - Syslog logging
+- `journald` - Systemd journal logging
+
+## Registry Authentication
+
+```yaml
+docker:
+  registries:
+    ghcr.io:
+      username: your-username
+      password: your-token
+    registry.example.com:
+      username: your-username
+      password: your-password
+```
+
+Authentication credentials for private Docker registries. Required for pulling images from private registries.
+
+## Performance Optimization
+
+### Performant Inspect
+
+```yaml
+docker:
+  use_performant_inspect: true
+```
+
+**Default:** `true`
+
+Enables optimized container inspection. Generally should be left enabled.
+
+## Example Configuration
+
+Here's a complete Docker configuration example:
+
+```yaml
+docker:
+  network:
+    name: pterodactyl_nw
+    driver: bridge
+    network_mode: pterodactyl_nw
+    interface: 172.18.0.1
+    ispn: false
+    is_internal: false
+    enable_icc: true
+    network_mtu: 1500
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
+    interfaces:
+      v4:
+        subnet: 172.18.0.0/16
+        gateway: 172.18.0.1
+      v6:
+        subnet: fdba:17c8:6c94::/64
+        gateway: fdba:17c8:6c94::1011
+  
+  domainname: ""
+  tmpfs_size: 100
+  container_pid_limit: 512
+  userns_mode: ""
+  use_performant_inspect: true
+  
+  installer_limits:
+    memory: 1024
+    cpu: 100
+  
+  overhead:
+    override: false
+    default_multiplier: 1.05
+  
+  log_config:
+    type: local
+    config:
+      max-size: "5m"
+      max-file: "1"
+      compress: "false"
+      mode: "non-blocking"
+  
+  registries: {}
+```
+
+## Network Isolation
+
+For enhanced security, you can configure network isolation:
+
+```yaml
+docker:
+  network:
+    is_internal: true  # Prevent external access
+    enable_icc: false  # Disable inter-container communication
+```
+
+<Warning>
+Enabling `is_internal` will prevent containers from accessing the internet. Only use this if your game servers don't require external connectivity.
+</Warning>

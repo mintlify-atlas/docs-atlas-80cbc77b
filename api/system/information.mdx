@@ -1,0 +1,349 @@
+---
+title: Get System Information
+description: Retrieve comprehensive system information including Wings version, Docker details, and hardware specifications
+---
+
+## Endpoint
+
+```http
+GET /api/system
+```
+
+Returns detailed information about the system that Wings is running on, including Wings version, Docker configuration, container statistics, and hardware specifications.
+
+## Authentication
+
+This endpoint requires authentication using a Bearer token in the `Authorization` header.
+
+```http
+Authorization: Bearer <your-token>
+```
+
+## Query Parameters
+
+<ParamField query="v" type="string" optional>
+  API version for the response format. Use `"2"` to receive the full detailed response. Without this parameter, a simplified legacy response is returned.
+</ParamField>
+
+## Response Formats
+
+### Version 2 Response (Recommended)
+
+When using `?v=2`, the endpoint returns comprehensive system information:
+
+<ResponseField name="version" type="string">
+  The current Wings version (e.g., `"develop"` or `"v1.11.0"`)
+</ResponseField>
+
+<ResponseField name="docker" type="object">
+  Docker-related information
+  
+  <Expandable title="docker properties">
+    <ResponseField name="version" type="string">
+      Docker daemon version
+    </ResponseField>
+    
+    <ResponseField name="cgroups" type="object">
+      Container cgroup configuration
+      
+      <Expandable title="cgroups properties">
+        <ResponseField name="driver" type="string">
+          Cgroup driver (e.g., `"systemd"`, `"cgroupfs"`)
+        </ResponseField>
+        
+        <ResponseField name="version" type="string">
+          Cgroup version (e.g., `"1"`, `"2"`)
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+    
+    <ResponseField name="containers" type="object">
+      Container statistics
+      
+      <Expandable title="containers properties">
+        <ResponseField name="total" type="integer">
+          Total number of containers on the system
+        </ResponseField>
+        
+        <ResponseField name="running" type="integer">
+          Number of running containers
+        </ResponseField>
+        
+        <ResponseField name="paused" type="integer">
+          Number of paused containers
+        </ResponseField>
+        
+        <ResponseField name="stopped" type="integer">
+          Number of stopped containers
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+    
+    <ResponseField name="storage" type="object">
+      Storage driver information
+      
+      <Expandable title="storage properties">
+        <ResponseField name="driver" type="string">
+          Storage driver being used (e.g., `"overlay2"`, `"aufs"`)
+        </ResponseField>
+        
+        <ResponseField name="filesystem" type="string">
+          Backing filesystem (e.g., `"extfs"`, `"xfs"`)
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+    
+    <ResponseField name="runc" type="object">
+      RunC runtime information
+      
+      <Expandable title="runc properties">
+        <ResponseField name="version" type="string">
+          RunC commit ID/version
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="system" type="object">
+  Host system information
+  
+  <Expandable title="system properties">
+    <ResponseField name="architecture" type="string">
+      System architecture (e.g., `"amd64"`, `"arm64"`)
+    </ResponseField>
+    
+    <ResponseField name="cpu_threads" type="integer">
+      Number of CPU threads available
+    </ResponseField>
+    
+    <ResponseField name="memory_bytes" type="integer">
+      Total system memory in bytes
+    </ResponseField>
+    
+    <ResponseField name="kernel_version" type="string">
+      Linux kernel version
+    </ResponseField>
+    
+    <ResponseField name="os" type="string">
+      Operating system description (e.g., `"Ubuntu 22.04.3 LTS"`)
+    </ResponseField>
+    
+    <ResponseField name="os_type" type="string">
+      Operating system type (e.g., `"linux"`)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Legacy Response (Default)
+
+Without the `v` query parameter, a simplified response is returned for backward compatibility:
+
+<ResponseField name="architecture" type="string">
+  System architecture (e.g., `"amd64"`)
+</ResponseField>
+
+<ResponseField name="cpu_count" type="integer">
+  Number of CPU threads available
+</ResponseField>
+
+<ResponseField name="kernel_version" type="string">
+  Linux kernel version
+</ResponseField>
+
+<ResponseField name="os" type="string">
+  Operating system type (e.g., `"linux"`)
+</ResponseField>
+
+<ResponseField name="version" type="string">
+  Wings version
+</ResponseField>
+
+## Example Requests
+
+<CodeGroup>
+```bash cURL (Version 2)
+curl -X GET "https://wings.example.com/api/system?v=2" \
+  -H "Authorization: Bearer your-token-here"
+```
+
+```bash cURL (Legacy)
+curl -X GET "https://wings.example.com/api/system" \
+  -H "Authorization: Bearer your-token-here"
+```
+
+```javascript JavaScript
+const response = await fetch('https://wings.example.com/api/system?v=2', {
+  method: 'GET',
+  headers: {
+    'Authorization': 'Bearer your-token-here'
+  }
+});
+
+const systemInfo = await response.json();
+console.log(systemInfo);
+```
+
+```python Python
+import requests
+
+response = requests.get(
+    'https://wings.example.com/api/system?v=2',
+    headers={'Authorization': 'Bearer your-token-here'}
+)
+
+system_info = response.json()
+print(system_info)
+```
+
+```go Go
+package main
+
+import (
+    "fmt"
+    "io"
+    "net/http"
+)
+
+func main() {
+    req, _ := http.NewRequest("GET", "https://wings.example.com/api/system?v=2", nil)
+    req.Header.Set("Authorization", "Bearer your-token-here")
+    
+    client := &http.Client{}
+    resp, err := client.Do(req)
+    if err != nil {
+        panic(err)
+    }
+    defer resp.Body.Close()
+    
+    body, _ := io.ReadAll(resp.Body)
+    fmt.Println(string(body))
+}
+```
+</CodeGroup>
+
+## Example Responses
+
+<CodeGroup>
+```json Version 2 Response
+{
+  "version": "v1.11.0",
+  "docker": {
+    "version": "24.0.7",
+    "cgroups": {
+      "driver": "systemd",
+      "version": "2"
+    },
+    "containers": {
+      "total": 15,
+      "running": 12,
+      "paused": 0,
+      "stopped": 3
+    },
+    "storage": {
+      "driver": "overlay2",
+      "filesystem": "extfs"
+    },
+    "runc": {
+      "version": "1.1.10-0ubuntu1~22.04.1"
+    }
+  },
+  "system": {
+    "architecture": "amd64",
+    "cpu_threads": 8,
+    "memory_bytes": 16777216000,
+    "kernel_version": "5.15.0-91-generic",
+    "os": "Ubuntu 22.04.3 LTS",
+    "os_type": "linux"
+  }
+}
+```
+
+```json Legacy Response
+{
+  "architecture": "amd64",
+  "cpu_count": 8,
+  "kernel_version": "5.15.0-91-generic",
+  "os": "linux",
+  "version": "v1.11.0"
+}
+```
+</CodeGroup>
+
+## Error Responses
+
+<ResponseExample>
+```json 401 Unauthorized
+{
+  "error": "Unauthorized"
+}
+```
+
+```json 500 Internal Server Error
+{
+  "error": "Failed to retrieve system information"
+}
+```
+</ResponseExample>
+
+## Use Cases
+
+### Health Monitoring
+
+This endpoint is useful for monitoring the health and status of your Wings installation:
+
+```javascript
+async function checkSystemHealth() {
+  const info = await fetch('https://wings.example.com/api/system?v=2', {
+    headers: { 'Authorization': 'Bearer token' }
+  }).then(r => r.json());
+  
+  // Check if Wings version is up to date
+  console.log('Wings Version:', info.version);
+  
+  // Monitor Docker container stats
+  const containerUsage = info.docker.containers.running / info.docker.containers.total;
+  console.log(`Container Usage: ${(containerUsage * 100).toFixed(1)}%`);
+  
+  // Check available resources
+  const memoryGB = info.system.memory_bytes / (1024 ** 3);
+  console.log(`Total Memory: ${memoryGB.toFixed(2)} GB`);
+}
+```
+
+### Compatibility Checks
+
+Verify that the system meets requirements before deploying servers:
+
+```python
+def verify_system_requirements(system_info):
+    # Check cgroup version for proper container management
+    if system_info['docker']['cgroups']['version'] != '2':
+        print('Warning: cgroup v2 recommended for optimal performance')
+    
+    # Verify storage driver
+    if system_info['docker']['storage']['driver'] != 'overlay2':
+        print('Warning: overlay2 storage driver recommended')
+    
+    # Check available CPU cores
+    if system_info['system']['cpu_threads'] < 4:
+        print('Warning: At least 4 CPU threads recommended')
+```
+
+## Implementation Details
+
+The system information is gathered from multiple sources:
+
+- **Wings Version**: Read from `system.Version` constant in `system/const.go`
+- **Docker Information**: Retrieved via Docker API using `client.ServerVersion()` and `client.Info()`
+- **System Details**: Collected using Go's `runtime` package and `/etc/os-release` file
+- **Kernel Version**: Parsed from Docker's kernel detection utilities
+
+<Note>
+  The endpoint returns live data from the system and Docker daemon. For frequently updated monitoring, consider caching responses appropriately to reduce load.
+</Note>
+
+## Related Endpoints
+
+- [Update Configuration](/api/system/configuration) - Update Wings runtime configuration
+- [Get Servers](/api/servers/list) - List all servers managed by this Wings instance

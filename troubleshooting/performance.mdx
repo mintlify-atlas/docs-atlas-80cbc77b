@@ -1,0 +1,619 @@
+---
+title: Performance Tuning
+description: Optimize Wings performance and resource usage
+---
+
+This guide covers performance optimization techniques for Pterodactyl Wings.
+
+## System Requirements
+
+### Minimum Requirements
+
+- **CPU:** 2+ cores recommended
+- **RAM:** 2GB minimum, 4GB+ recommended
+- **Disk:** SSD strongly recommended for `/var/lib/pterodactyl`
+- **Network:** 1Gbps for production environments
+- **Docker:** Version 20.10 or newer
+
+### Recommended Specifications
+
+For production environments hosting multiple servers:
+
+- **CPU:** 4+ cores with high single-thread performance
+- **RAM:** 8GB+ depending on server count
+- **Disk:** NVMe SSD with 500+ MB/s write speed
+- **Network:** 10Gbps for high-traffic environments
+
+## Configuration Optimization
+
+### Disk Check Interval
+
+Wings calculates disk usage for each server periodically. This can cause high I/O on systems with many servers.
+
+**Default setting:**
+```yaml
+system:
+  disk_check_interval: 150  # seconds
+```
+
+**Optimization:**
+
+- **Increase interval** for servers with large file counts:
+  ```yaml
+  system:
+    disk_check_interval: 300  # Check every 5 minutes
+  ```
+
+- **Disable completely** (not recommended):
+  ```yaml
+  system:
+    disk_check_interval: 0  # Always returns 0
+  ```
+
+<Warning>
+Setting `disk_check_interval` too low can cause massive I/O bottlenecks and high CPU usage. The default of 150 seconds is recommended for most installations.
+</Warning>
+
+### Permission Checks on Boot
+
+Wings can verify file permissions when starting servers, which may slow boot times on servers with many files.
+
+**Default setting:**
+```yaml
+system:
+  check_permissions_on_boot: true
+```
+
+**Optimization:**
+
+Disable if you're confident permissions are correct:
+```yaml
+system:
+  check_permissions_on_boot: false
+```
+
+<Note>
+Disabling permission checks can speed up server boots but may cause permission issues if external processes modify files.
+</Note>
+
+### Server Bootstrap Concurrency
+
+Wings uses a worker pool to bootstrap servers on startup with a limit of 4 concurrent servers (configured in `cmd/root.go:196`).
+
+This prevents resource exhaustion when Wings starts with many servers. The limit is currently hardcoded but prevents:
+- Memory exhaustion
+- Docker API overload
+- Network congestion
+- Slow boot times
+
+### Activity Send Settings
+
+Activity logs are sent to the Panel in batches to reduce API calls.
+
+**Default settings:**
+```yaml
+system:
+  activity_send_interval: 60    # seconds
+  activity_send_count: 100      # events per batch
+```
+
+**Optimization for high-traffic nodes:**
+```yaml
+system:
+  activity_send_interval: 120   # Send less frequently
+  activity_send_count: 200      # Larger batches
+```
+
+### Websocket Log Count
+
+Controls how many log lines are sent when a user connects to the console.
+
+**Default:**
+```yaml
+system:
+  websocket_log_count: 150
+```
+
+**Optimization:**
+Reduce for better initial connection speed:
+```yaml
+system:
+  websocket_log_count: 50
+```
+
+## Docker Configuration
+
+### Container PID Limit
+
+Limits processes per container to prevent fork bombs.
+
+**Default:**
+```yaml
+docker:
+  container_pid_limit: 512
+```
+
+**For servers needing more processes:**
+```yaml
+docker:
+  container_pid_limit: 1024
+```
+
+### Tmpfs Size
+
+Controls the size of `/tmp` mounted in containers. Uses host RAM.
+
+**Default:**
+```yaml
+docker:
+  tmpfs_size: 100  # MB
+```
+
+**Optimization:**
+- **Reduce** if host RAM is limited
+- **Increase** for servers needing larger temp storage
+
+<Warning>
+Tmpfs uses host system memory. Don't allocate too much per server as it adds up quickly.
+</Warning>
+
+### Memory Overhead
+
+Wings applies a memory overhead multiplier to prevent OOM kills from JVM and similar software.
+
+**Default behavior** (when `override: false`):
+- < 2048 MB: 1.15x (15% overhead)
+- < 4096 MB: 1.10x (10% overhead)
+- ≥ 4096 MB: 1.05x (5% overhead)
+
+**Custom configuration:**
+```yaml
+docker:
+  overhead:
+    override: true
+    default_multiplier: 1.05
+    multipliers:
+      2048: 1.15
+      4096: 1.10
+```
+
+See `config/config_docker.go:154-185` for implementation details.
+
+### Network Configuration
+
+**Default network settings:**
+```yaml
+docker:
+  network:
+    interface: 172.18.0.1
+    name: pterodactyl_nw
+    driver: bridge
+    enable_icc: true      # Inter-container communication
+    network_mtu: 1500
+    dns:
+      - 1.1.1.1
+      - 1.0.0.1
+```
+
+**Optimization:**
+
+1. **Disable ICC** if servers don't need to communicate:
+   ```yaml
+   enable_icc: false
+   ```
+
+2. **Adjust MTU** for your network:
+   ```yaml
+   network_mtu: 9000  # Jumbo frames (if supported)
+   ```
+
+3. **Use local DNS** for faster resolution:
+   ```yaml
+   dns:
+     - 127.0.0.1  # Local DNS resolver
+   ```
+
+### Docker Logging
+
+Configure container log driver for better performance.
+
+**Default:**
+```yaml
+docker:
+  log_config:
+    type: local
+    config:
+      max-size: 5m
+      max-file: 1
+      compress: false
+      mode: non-blocking
+```
+
+**Optimization:**
+
+- **Use local driver** (faster than json-file)
+- **Enable compression** to save disk:
+  ```yaml
+  compress: true
+  ```
+- **Reduce max-size** for less disk usage:
+  ```yaml
+  max-size: 2m
+  ```
+
+### Performant Docker Inspect
+
+Wings can use an optimized Docker inspect method.
+
+**Default:**
+```yaml
+docker:
+  use_performant_inspect: true
+```
+
+Keep this enabled for better performance.
+
+## Storage Optimization
+
+### Backup Write Limits
+
+Limit disk I/O during backups to prevent performance degradation.
+
+**Default (unlimited):**
+```yaml
+system:
+  backups:
+    write_limit: 0
+```
+
+**Apply limits:**
+```yaml
+system:
+  backups:
+    write_limit: 50  # MB/s
+```
+
+### Backup Compression
+
+Choose compression level based on your priorities.
+
+**Options:**
+- `none` - No compression (fastest, largest)
+- `best_speed` - gzip level 1 (default, balanced)
+- `best_compression` - gzip level 9 (slowest, smallest)
+
+**Default:**
+```yaml
+system:
+  backups:
+    compression_level: best_speed
+```
+
+**For faster backups:**
+```yaml
+system:
+  backups:
+    compression_level: none
+```
+
+**For minimal disk usage:**
+```yaml
+system:
+  backups:
+    compression_level: best_compression
+```
+
+### Transfer Download Limits
+
+Limit network I/O when downloading server transfers.
+
+**Default:**
+```yaml
+system:
+  transfers:
+    download_limit: 0  # Unlimited
+```
+
+**Apply limits:**
+```yaml
+system:
+  transfers:
+    download_limit: 100  # MB/s
+```
+
+### Docker Storage Driver
+
+The storage driver significantly impacts performance.
+
+**Check current driver:**
+```bash
+docker info | grep "Storage Driver"
+```
+
+**Recommended drivers:**
+1. **overlay2** - Best for most use cases
+2. **zfs** - Good for datasets, snapshots
+3. **btrfs** - Good for advanced features
+
+**Avoid:**
+- **aufs** - Deprecated, slow
+- **devicemapper** - Slow, avoid in production
+
+**Configure storage driver** in `/etc/docker/daemon.json`:
+```json
+{
+  "storage-driver": "overlay2"
+}
+```
+
+## Resource Monitoring
+
+### Built-in Stats Collection
+
+Wings continuously monitors resource usage for running servers via Docker stats API (see `environment/docker/stats.go:35-96`).
+
+**What's monitored:**
+- Memory usage (calculated to match Panel display)
+- CPU usage (absolute percentage)
+- Network I/O (RX/TX bytes)
+- Uptime (in milliseconds)
+
+**Stats update frequency:**
+Real-time via Docker streaming API (updates every ~1 second)
+
+### Monitoring Resource Usage
+
+**Via Docker:**
+```bash
+docker stats
+```
+
+**Via Wings API:**
+```bash
+curl -H "Authorization: Bearer <token>" \
+  https://wings.example.com/api/servers/<uuid>/resources
+```
+
+**Via system tools:**
+```bash
+# CPU usage
+top -b -n 1 | grep wings
+
+# Memory usage
+ps aux | grep wings
+
+# I/O stats
+iotop -o
+
+# Network stats
+iftop -i pterodactyl0
+```
+
+## Performance Bottlenecks
+
+### High CPU Usage
+
+**Common causes:**
+
+1. **Too many servers bootstrapping**
+   - Wings limits concurrent bootstrap to 4 servers
+   - Wait for boot to complete
+
+2. **Frequent disk checks**
+   - Increase `disk_check_interval`
+   - Use faster storage (SSD/NVMe)
+
+3. **Many servers with high process counts**
+   - Monitor with `docker stats`
+   - Adjust `container_pid_limit` if needed
+
+4. **Console spam (throttling)**
+   - Wings has built-in console throttling (2000 lines per 100ms by default)
+   - Configure in `config.yml`:
+     ```yaml
+     throttles:
+       enabled: true
+       lines: 2000
+       line_reset_interval: 100  # milliseconds
+     ```
+
+### High Memory Usage
+
+**Common causes:**
+
+1. **Many running servers**
+   - Each server container uses RAM
+   - Monitor with `docker stats`
+   - Ensure adequate overhead multipliers
+
+2. **Memory leaks in game servers**
+   - Restart servers periodically
+   - Adjust memory limits
+
+3. **Large tmpfs allocations**
+   - Reduce `tmpfs_size` in config
+
+4. **Backup/transfer operations**
+   - Apply `write_limit` to backups
+   - Schedule during off-peak hours
+
+### High Disk I/O
+
+**Common causes:**
+
+1. **Frequent disk checks**
+   - Increase `disk_check_interval` to 300+
+   - Use SSD storage
+
+2. **Permission checks on boot**
+   - Set `check_permissions_on_boot: false`
+
+3. **Backup operations**
+   - Apply `write_limit`
+   - Use `best_speed` compression
+   - Schedule during off-peak hours
+
+4. **Slow storage driver**
+   - Use overlay2 instead of aufs/devicemapper
+   - Enable SSD TRIM:
+     ```bash
+     fstrim -av
+     ```
+
+5. **Docker logs filling disk**
+   - Configure log rotation
+   - Use `local` log driver
+   - Reduce `max-size`
+
+**Monitor I/O:**
+```bash
+# Overall I/O
+iostat -x 1
+
+# Per-process I/O
+iotop -o
+
+# Disk usage
+df -h
+docker system df
+
+# Find large directories
+du -sh /var/lib/pterodactyl/volumes/* | sort -h
+```
+
+### High Network Usage
+
+**Common causes:**
+
+1. **Server transfers**
+   - Apply `download_limit`
+   - Schedule during off-peak hours
+
+2. **Many concurrent backups**
+   - Stagger backup schedules
+   - Use local backup storage
+
+3. **Panel API calls**
+   - Check `remote_query.timeout` setting
+   - Ensure Panel is responsive
+
+**Monitor network:**
+```bash
+# Interface stats
+iftop -i pterodactyl0
+
+# Per-container network
+docker stats --format "table {{.Name}}\t{{.NetIO}}"
+
+# Overall bandwidth
+nload
+```
+
+## Kernel Tuning
+
+### Network Performance
+
+**Increase network buffers:**
+```bash
+sysctl -w net.core.rmem_max=134217728
+sysctl -w net.core.wmem_max=134217728
+sysctl -w net.ipv4.tcp_rmem="4096 87380 67108864"
+sysctl -w net.ipv4.tcp_wmem="4096 65536 67108864"
+```
+
+**Make permanent** in `/etc/sysctl.conf`:
+```
+net.core.rmem_max = 134217728
+net.core.wmem_max = 134217728
+net.ipv4.tcp_rmem = 4096 87380 67108864
+net.ipv4.tcp_wmem = 4096 65536 67108864
+```
+
+### File Descriptor Limits
+
+**Increase for Docker:**
+```bash
+ulimit -n 65536
+```
+
+**Make permanent** in `/etc/security/limits.conf`:
+```
+* soft nofile 65536
+* hard nofile 65536
+root soft nofile 65536
+root hard nofile 65536
+```
+
+### Docker Daemon Tuning
+
+**Edit `/etc/docker/daemon.json`:**
+```json
+{
+  "log-driver": "local",
+  "log-opts": {
+    "max-size": "5m",
+    "max-file": "3"
+  },
+  "storage-driver": "overlay2",
+  "max-concurrent-downloads": 10,
+  "max-concurrent-uploads": 5,
+  "default-ulimits": {
+    "nofile": {
+      "Name": "nofile",
+      "Hard": 65536,
+      "Soft": 65536
+    }
+  }
+}
+```
+
+Restart Docker:
+```bash
+systemctl restart docker
+```
+
+## Monitoring and Alerting
+
+### System Metrics
+
+**Monitor key metrics:**
+- CPU usage per core
+- Memory usage and swap
+- Disk I/O and latency
+- Network throughput
+- Docker daemon health
+- Wings process health
+
+**Recommended tools:**
+- **Prometheus + Grafana** - Comprehensive monitoring
+- **Netdata** - Real-time performance monitoring
+- **cAdvisor** - Container metrics
+- **node_exporter** - System metrics
+
+### Health Checks
+
+**Wings health endpoint:**
+```bash
+curl http://localhost:8080/api/system
+```
+
+**Docker health:**
+```bash
+docker info
+systemctl status docker
+```
+
+**Disk space alerts:**
+```bash
+# Alert if disk usage > 80%
+df -h | awk '$5 > 80 {print $0}'
+
+# Alert if inodes > 80%
+df -i | awk '$5 > 80 {print $0}'
+```
+
+## See Also
+
+- [Common Issues](/troubleshooting/common-issues) - Frequently encountered problems
+- [Debugging Guide](/troubleshooting/debugging) - Advanced debugging techniques
+- [Wings Configuration](/configuration/config-file) - Complete configuration reference

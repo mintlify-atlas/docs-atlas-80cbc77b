@@ -1,0 +1,125 @@
+---
+title: List Servers
+api: GET /api/servers
+---
+
+Returns all servers that are registered and configured on this Wings instance.
+
+## Authentication
+
+Requires the Wings authentication token in the `Authorization` header:
+
+```
+Authorization: Bearer <token>
+```
+
+## Response
+
+Returns an array of server objects with their current state and resource utilization.
+
+<ResponseField name="state" type="string">
+  Current state of the server. One of: `offline`, `starting`, `running`, `stopping`
+</ResponseField>
+
+<ResponseField name="is_suspended" type="boolean">
+  Whether the server is currently suspended
+</ResponseField>
+
+<ResponseField name="utilization" type="object">
+  Current resource usage statistics
+  
+  <Expandable title="properties">
+    <ResponseField name="state" type="string">
+      Current process state
+    </ResponseField>
+    
+    <ResponseField name="memory_bytes" type="integer">
+      Current memory usage in bytes
+    </ResponseField>
+    
+    <ResponseField name="memory_limit_bytes" type="integer">
+      Memory limit in bytes
+    </ResponseField>
+    
+    <ResponseField name="cpu_absolute" type="number">
+      Absolute CPU usage percentage
+    </ResponseField>
+    
+    <ResponseField name="disk_bytes" type="integer">
+      Current disk usage in bytes
+    </ResponseField>
+    
+    <ResponseField name="network_rx_bytes" type="integer">
+      Network received bytes
+    </ResponseField>
+    
+    <ResponseField name="network_tx_bytes" type="integer">
+      Network transmitted bytes
+    </ResponseField>
+    
+    <ResponseField name="uptime" type="integer">
+      Server uptime in milliseconds
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="configuration" type="object">
+  Server configuration details including UUID, limits, and allocations
+</ResponseField>
+
+## Example Request
+
+```bash
+curl -X GET https://wings.example.com/api/servers \
+  -H "Authorization: Bearer your-wings-token" \
+  -H "Accept: application/json"
+```
+
+## Example Response
+
+```json
+[
+  {
+    "state": "running",
+    "is_suspended": false,
+    "utilization": {
+      "state": "running",
+      "memory_bytes": 536870912,
+      "memory_limit_bytes": 1073741824,
+      "cpu_absolute": 25.5,
+      "disk_bytes": 2147483648,
+      "network_rx_bytes": 1024000,
+      "network_tx_bytes": 512000,
+      "uptime": 3600000
+    },
+    "configuration": {
+      "uuid": "8d3f9a2e-5c7b-4f1e-9d2a-6e8f1c3b5a7d",
+      "suspended": false,
+      "invocation": "java -Xms128M -Xmx1024M -jar server.jar",
+      "skip_egg_scripts": false,
+      "build": {
+        "memory_limit": 1024,
+        "swap": 0,
+        "io_weight": 500,
+        "cpu_limit": 100,
+        "disk_space": 5120,
+        "threads": "0-3"
+      },
+      "container": {
+        "image": "ghcr.io/pterodactyl/yolks:java_17"
+      },
+      "allocations": {
+        "default": {
+          "ip": "0.0.0.0",
+          "port": 25565
+        },
+        "mappings": {}
+      }
+    }
+  }
+]
+```
+
+## Source Reference
+
+Implemented in `router/router_system.go:50`

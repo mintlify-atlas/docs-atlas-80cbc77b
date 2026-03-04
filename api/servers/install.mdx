@@ -1,0 +1,80 @@
+---
+title: Run Installation
+api: POST /api/servers/:server/install
+---
+
+Triggers the installation process for a server. This is typically called after server creation or to retry a failed installation.
+
+## Authentication
+
+Requires the Wings authentication token in the `Authorization` header:
+
+```
+Authorization: Bearer <token>
+```
+
+## Path Parameters
+
+<ParamField path="server" type="string" required>
+  The UUID of the server
+</ParamField>
+
+## Response
+
+Returns `202 Accepted` to indicate the installation process has started in the background.
+
+## Error Responses
+
+<ResponseField name="404 Not Found">
+  The requested server does not exist on this Wings instance.
+</ResponseField>
+
+## Behavior
+
+This endpoint performs the installation asynchronously:
+1. Syncs server state with the Panel
+2. Runs the server installation process
+3. Executes egg installation scripts
+4. Downloads required files
+
+The installation runs in a background goroutine, so errors during installation are logged but not returned in the API response.
+
+### Installation Steps
+1. **Sync**: Fetches latest server configuration from Panel
+2. **Install**: Executes the installation process defined by the server's egg
+   - Pulls Docker image if needed
+   - Runs installation container
+   - Executes installation scripts
+   - Downloads files specified in egg configuration
+
+## Example Request
+
+```bash
+curl -X POST https://wings.example.com/api/servers/8d3f9a2e-5c7b-4f1e-9d2a-6e8f1c3b5a7d/install \
+  -H "Authorization: Bearer your-wings-token" \
+  -H "Accept: application/json"
+```
+
+## Example Response
+
+```
+HTTP/1.1 202 Accepted
+```
+
+## Notes
+
+- Installation process runs asynchronously
+- Monitor server logs or websocket events to track installation progress
+- If sync fails, the installation is aborted and error is logged
+- Installation errors are logged but don't return an API error response
+- The server is synced with the Panel before installation begins to ensure up-to-date configuration
+
+## Use Cases
+
+- Initial server installation after creation
+- Retrying a failed installation
+- Re-running installation scripts after egg updates
+
+## Source Reference
+
+Implemented in `router/router_server.go:153`

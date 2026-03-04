@@ -1,0 +1,389 @@
+---
+title: SSL/TLS Certificates
+description: Configuring SSL/TLS encryption for Wings
+---
+
+Wings supports SSL/TLS encryption for both the HTTP API and WebSocket connections. This page covers certificate configuration and best practices.
+
+## TLS Configuration
+
+Wings uses industry-standard TLS configuration based on Cloudflare's recommendations.
+
+### Default TLS Settings
+
+Wings implements secure defaults for TLS connections:
+
+```go
+// config/config.go:34-51
+var DefaultTLSConfig = &tls.Config{
+    NextProtos: []string{"h2", "http/1.1"},
+    CipherSuites: []uint16{
+        tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+        tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+        tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+        tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+        tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+        tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
+    },
+    PreferServerCipherSuites: true,
+    MinVersion:               tls.VersionTLS12,
+    MaxVersion:               tls.VersionTLS13,
+    CurvePreferences:         []tls.CurveID{tls.X25519, tls.CurveP256},
+}
+```
+
+**Key Features:**
+
+- **HTTP/2 Support**: Enabled via `h2` protocol
+- **Modern Cipher Suites**: Only secure ciphers (ECDHE with AES-GCM or ChaCha20-Poly1305)
+- **TLS 1.2+**: Minimum TLS 1.2, supports TLS 1.3
+- **Forward Secrecy**: All cipher suites provide perfect forward secrecy
+- **Elliptic Curves**: Prefers X25519 and P-256
+
+### Configuration File
+
+Enable SSL in `/etc/pterodactyl/config.yml`:
+
+```yaml
+api:
+  host: 0.0.0.0
+  port: 8080
+  ssl:
+    enabled: true
+    cert: /etc/letsencrypt/live/wings.example.com/fullchain.pem
+    key: /etc/letsencrypt/live/wings.example.com/privkey.pem
+```
+
+Configuration structure:
+
+```go
+// config/config.go:83-88
+Ssl struct {
+    Enabled         bool   `json:"enabled" yaml:"enabled"`
+    CertificateFile string `json:"cert" yaml:"cert"`
+    KeyFile         string `json:"key" yaml:"key"`
+}
+```
+
+## Certificate Acquisition
+
+### Using Let's Encrypt
+
+The recommended way to obtain certificates is using Certbot with Let's Encrypt.
+
+#### Install Certbot
+
+**Ubuntu/Debian:**
+
+```bash
+sudo apt update
+sudo apt install certbot
+```
+
+**CentOS/RHEL:**
+
+```bash
+sudo yum install certbot
+```
+
+#### Obtain Certificate
+
+**Standalone Mode** (Wings must be stopped):
+
+```bash
+sudo systemctl stop wings
+sudo certbot certonly --standalone -d wings.example.com
+sudo systemctl start wings
+```
+
+**Webroot Mode** (Wings can stay running):
+
+```bash
+sudo certbot certonly --webroot -w /var/www/html -d wings.example.com
+```
+
+**DNS Challenge** (for wildcard certificates):
+
+```bash
+sudo certbot certonly --manual --preferred-challenges dns -d wings.example.com
+```
+
+#### Certificate Locations
+
+Certbot stores certificates in `/etc/letsencrypt/live/`:
+
+- **Certificate**: `/etc/letsencrypt/live/wings.example.com/fullchain.pem`
+- **Private Key**: `/etc/letsencrypt/live/wings.example.com/privkey.pem`
+- **Chain**: `/etc/letsencrypt/live/wings.example.com/chain.pem`
+- **Certificate Only**: `/etc/letsencrypt/live/wings.example.com/cert.pem`
+
+<Note>
+Always use `fullchain.pem` for the certificate file, not `cert.pem`. The full chain includes intermediate certificates required for proper validation.
+</Note>
+
+### Auto-Renewal
+
+Certbot automatically installs a systemd timer for renewal:
+
+```bash
+# Check renewal timer status
+sudo systemctl status certbot.timer
+
+# Test renewal (dry run)
+sudo certbot renew --dry-run
+```
+
+#### Reload Wings After Renewal
+
+Create a renewal hook to reload Wings:
+
+```bash
+sudo nano /etc/letsencrypt/renewal-hooks/deploy/reload-wings.sh
+```
+
+Add:
+
+```bash
+#!/bin/bash
+systemctl reload wings
+```
+
+Make executable:
+
+```bash
+sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-wings.sh
+```
+
+### Using Custom Certificates
+
+You can use certificates from any Certificate Authority:
+
+1. **Obtain certificate and key** from your CA
+2. **Copy to secure location**:
+
+```bash
+sudo mkdir -p /etc/pterodactyl/certs
+sudo cp fullchain.pem /etc/pterodactyl/certs/
+sudo cp privkey.pem /etc/pterodactyl/certs/
+sudo chmod 600 /etc/pterodactyl/certs/privkey.pem
+sudo chown root:root /etc/pterodactyl/certs/*
+```
+
+3. **Update configuration**:
+
+```yaml
+api:
+  ssl:
+    enabled: true
+    cert: /etc/pterodactyl/certs/fullchain.pem
+    key: /etc/pterodactyl/certs/privkey.pem
+```
+
+## SFTP Host Keys
+
+Wings automatically generates an ED25519 host key for SFTP on first run.
+
+### Key Generation
+
+```go
+// sftp/server.go:188-209
+func (c *SFTPServer) generateED25519PrivateKey() error {
+    _, priv, err := ed25519.GenerateKey(rand.Reader)
+    if err != nil {
+        return errors.Wrap(err, "sftp: failed to generate ED25519 private key")
+    }
+    if err := os.MkdirAll(path.Dir(c.PrivateKeyPath()), 0o755); err != nil {
+        return errors.Wrap(err, "sftp: could not create internal sftp data directory")
+    }
+    o, err := os.OpenFile(c.PrivateKeyPath(), os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600)
+    if err != nil {
+        return errors.WithStack(err)
+    }
+    defer o.Close()
+
+    b, err := x509.MarshalPKCS8PrivateKey(priv)
+    if err != nil {
+        return errors.Wrap(err, "sftp: failed to marshal private key into bytes")
+    }
+    if err := pem.Encode(o, &pem.Block{Type: "PRIVATE KEY", Bytes: b}); err != nil {
+        return errors.Wrap(err, "sftp: failed to write ED25519 private key to disk")
+    }
+    return nil
+}
+```
+
+### Key Location
+
+The SFTP host key is stored at:
+
+```
+/var/lib/pterodactyl/.sftp/id_ed25519
+```
+
+### SFTP Cryptography
+
+Wings uses modern SSH algorithms:
+
+```go
+// sftp/server.go:71-84
+Config: ssh.Config{
+    KeyExchanges: []string{
+        "curve25519-sha256", "curve25519-sha256@libssh.org",
+        "ecdh-sha2-nistp256", "ecdh-sha2-nistp384", "ecdh-sha2-nistp521",
+        "diffie-hellman-group14-sha256",
+    },
+    Ciphers: []string{
+        "aes128-gcm@openssh.com",
+        "chacha20-poly1305@openssh.com",
+        "aes128-ctr", "aes192-ctr", "aes256-ctr",
+    },
+    MACs: []string{
+        "hmac-sha2-256-etm@openssh.com", "hmac-sha2-256",
+    },
+},
+```
+
+## Certificate Validation
+
+### Testing SSL Configuration
+
+Verify your SSL setup:
+
+```bash
+# Test HTTPS connection
+curl -v https://wings.example.com:8080/api/system
+
+# Check certificate details
+openssl s_client -connect wings.example.com:8080 -showcerts
+
+# Test TLS version support
+nmap --script ssl-enum-ciphers -p 8080 wings.example.com
+```
+
+### Common Issues
+
+#### Certificate Chain Issues
+
+**Problem**: Browser shows certificate warnings
+
+**Solution**: Ensure you're using `fullchain.pem`, not `cert.pem`:
+
+```yaml
+ssl:
+  cert: /etc/letsencrypt/live/domain/fullchain.pem  # Correct
+  # NOT: /etc/letsencrypt/live/domain/cert.pem      # Wrong
+```
+
+#### Permission Denied
+
+**Problem**: Wings cannot read certificate files
+
+**Solution**: Check file permissions:
+
+```bash
+sudo chmod 644 /etc/letsencrypt/live/domain/fullchain.pem
+sudo chmod 600 /etc/letsencrypt/live/domain/privkey.pem
+sudo chown root:root /etc/letsencrypt/live/domain/*
+```
+
+#### Mixed Content Warnings
+
+**Problem**: WebSocket connection fails with SSL
+
+**Solution**: Ensure Panel uses `wss://` for WebSocket URLs, not `ws://`
+
+## Security Best Practices
+
+### File Permissions
+
+Protect private keys:
+
+```bash
+# Private key should be readable only by root
+sudo chmod 600 /etc/letsencrypt/live/domain/privkey.pem
+
+# Certificate can be world-readable
+sudo chmod 644 /etc/letsencrypt/live/domain/fullchain.pem
+```
+
+### Certificate Monitoring
+
+Monitor certificate expiration:
+
+```bash
+# Check expiration date
+openssl x509 -in /etc/letsencrypt/live/domain/cert.pem -noout -enddate
+
+# Days until expiration
+openssl x509 -in /etc/letsencrypt/live/domain/cert.pem -noout -checkend 604800
+```
+
+### HSTS (HTTP Strict Transport Security)
+
+Consider enabling HSTS headers via reverse proxy:
+
+```nginx
+add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+```
+
+### Cipher Suite Selection
+
+Wings uses only secure cipher suites. Never modify `DefaultTLSConfig` to include weak ciphers like:
+
+- RC4
+- 3DES
+- CBC-mode ciphers (vulnerable to BEAST/Lucky13)
+- Non-ECDHE ciphers (no forward secrecy)
+
+### TLS Version
+
+- **Minimum**: TLS 1.2 (required)
+- **Recommended**: TLS 1.3 (automatic when supported)
+- **Never**: TLS 1.0 or 1.1 (deprecated and insecure)
+
+## Reverse Proxy Configuration
+
+When using a reverse proxy (Nginx, Apache), you can terminate SSL there:
+
+### Nginx Example
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name wings.example.com;
+
+    ssl_certificate /etc/letsencrypt/live/wings.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/wings.example.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256';
+    ssl_prefer_server_ciphers on;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # WebSocket support
+    location /api/servers/ {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+```
+
+With a reverse proxy, disable SSL in Wings:
+
+```yaml
+api:
+  ssl:
+    enabled: false
+  trusted_proxies:
+    - 127.0.0.1
+```
+
+See [Best Practices](/security/best-practices) for more reverse proxy configurations.

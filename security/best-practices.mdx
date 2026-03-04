@@ -1,0 +1,625 @@
+---
+title: Security Best Practices
+description: Comprehensive security recommendations for Wings deployment
+---
+
+This page provides security best practices for deploying and operating Pterodactyl Wings in production environments.
+
+## Network Security
+
+### Firewall Configuration
+
+Restrict access to Wings ports using firewall rules.
+
+#### UFW (Ubuntu/Debian)
+
+```bash
+# Allow SSH
+sudo ufw allow 22/tcp
+
+# Allow Wings API (only from Panel IP)
+sudo ufw allow from PANEL_IP to any port 8080 proto tcp
+
+# Allow SFTP
+sudo ufw allow 2022/tcp
+
+# Allow game server ports (adjust as needed)
+sudo ufw allow 25565:25665/tcp
+sudo ufw allow 25565:25665/udp
+
+# Enable firewall
+sudo ufw enable
+```
+
+#### firewalld (CentOS/RHEL)
+
+```bash
+# Add Wings API (rich rule for IP restriction)
+sudo firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="PANEL_IP" port port="8080" protocol="tcp" accept'
+
+# Add SFTP
+sudo firewall-cmd --permanent --add-port=2022/tcp
+
+# Add game server port range
+sudo firewall-cmd --permanent --add-port=25565-25665/tcp
+sudo firewall-cmd --permanent --add-port=25565-25665/udp
+
+# Reload firewall
+sudo firewall-cmd --reload
+```
+
+#### iptables
+
+```bash
+# Allow Wings API from Panel only
+sudo iptables -A INPUT -p tcp -s PANEL_IP --dport 8080 -j ACCEPT
+sudo iptables -A INPUT -p tcp --dport 8080 -j DROP
+
+# Allow SFTP
+sudo iptables -A INPUT -p tcp --dport 2022 -j ACCEPT
+
+# Allow game servers
+sudo iptables -A INPUT -p tcp --dport 25565:25665 -j ACCEPT
+sudo iptables -A INPUT -p udp --dport 25565:25665 -j ACCEPT
+
+# Save rules
+sudo iptables-save | sudo tee /etc/iptables/rules.v4
+```
+
+### Trusted Proxies
+
+If Wings is behind a reverse proxy, configure trusted proxies:
+
+```yaml
+api:
+  trusted_proxies:
+    - 127.0.0.1
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+```
+
+Configuration from `config/config.go:98-99`:
+
+```go
+// A list of IP address of proxies that may send a X-Forwarded-For header
+TrustedProxies []string `json:"trusted_proxies" yaml:"trusted_proxies"`
+```
+
+Trusted proxies are set in `router/router.go:20-23`:
+
+```go
+if err := router.SetTrustedProxies(config.Get().Api.TrustedProxies); err != nil {
+    panic(errors.WithStack(err))
+}
+```
+
+### CORS Configuration
+
+Wings automatically sets CORS headers for the Panel:
+
+```go
+// router/middleware/middleware.go:91-137
+func SetAccessControlHeaders() gin.HandlerFunc {
+    cfg := config.Get()
+    origins := cfg.AllowedOrigins
+    location := cfg.PanelLocation
+
+    return func(c *gin.Context) {
+        c.Header("Access-Control-Allow-Origin", location)
+        c.Header("Access-Control-Allow-Credentials", "true")
+        c.Header("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS")
+        c.Header("Access-Control-Allow-Headers", "Accept, Accept-Encoding, Authorization, Cache-Control, Content-Type, Content-Length, Origin, X-Real-IP, X-CSRF-Token")
+        c.Header("Access-Control-Max-Age", "7200")
+
+        // Validate origin
+        origin := c.GetHeader("Origin")
+        if origin != location {
+            for _, o := range origins {
+                if o == "*" || o == origin {
+                    c.Header("Access-Control-Allow-Origin", o)
+                    break
+                }
+            }
+        }
+        c.Next()
+    }
+}
+```
+
+Add additional allowed origins:
+
+```yaml
+allowed_origins:
+  - https://panel.example.com
+  - https://admin.example.com
+```
+
+<Warning>
+Never use `"*"` for allowed origins in production as it defeats CORS security.
+</Warning>
+
+### Private Network Access
+
+For internal network deployments:
+
+```yaml
+allow_cors_private_network: true
+```
+
+This sets the `Access-Control-Request-Private-Network` header for RFC1918 networks.
+
+## SSL/TLS Best Practices
+
+### Always Use HTTPS
+
+Never run Wings without SSL in production:
+
+```yaml
+api:
+  ssl:
+    enabled: true
+    cert: /etc/letsencrypt/live/wings.example.com/fullchain.pem
+    key: /etc/letsencrypt/live/wings.example.com/privkey.pem
+```
+
+### Certificate Management
+
+1. **Use Let's Encrypt** for free, automated certificates
+2. **Enable auto-renewal** via Certbot timer
+3. **Monitor expiration** with alerting
+4. **Use full chain** (`fullchain.pem`, not `cert.pem`)
+
+See [SSL Certificates](/security/ssl-certificates) for detailed configuration.
+
+### TLS Version Enforcement
+
+Wings enforces TLS 1.2+ by default:
+
+```go
+// config/config.go:48-49
+MinVersion: tls.VersionTLS12,
+MaxVersion: tls.VersionTLS13,
+```
+
+**Never disable this** or allow TLS 1.0/1.1.
+
+## Authentication Security
+
+### Token Management
+
+1. **Generate strong tokens**:
+```bash
+openssl rand -base64 32
+```
+
+2. **Store securely**:
+```bash
+sudo chmod 600 /etc/pterodactyl/config.yml
+sudo chown root:root /etc/pterodactyl/config.yml
+```
+
+3. **Rotate regularly** (quarterly recommended)
+
+4. **Use systemd credentials** for enhanced security:
+
+```ini
+# /etc/systemd/system/wings.service
+[Service]
+LoadCredential=token:/etc/pterodactyl/credentials/token
+Environment=WINGS_TOKEN=file://${CREDENTIALS_DIRECTORY}/token
+```
+
+### WebSocket Security
+
+WebSocket JWTs are automatically managed by the Panel:
+
+- Tokens expire after configured duration
+- Tokens are denied on Wings restart
+- Tokens can be invalidated per-user/server
+- Rate limiting prevents abuse
+
+See [Authentication](/security/authentication) for details.
+
+### SFTP Authentication
+
+**Prefer public key authentication:**
+
+1. Generate SSH key:
+```bash
+ssh-keygen -t ed25519 -C "pterodactyl-sftp"
+```
+
+2. Add public key in Panel under user settings
+
+3. Connect:
+```bash
+sftp -P 2022 -i ~/.ssh/id_ed25519 username.serverid@wings.example.com
+```
+
+**Disable password authentication** if not needed (Panel configuration).
+
+## System Hardening
+
+### Operating System Updates
+
+Keep your system updated:
+
+```bash
+# Ubuntu/Debian
+sudo apt update && sudo apt upgrade -y
+
+# CentOS/RHEL
+sudo yum update -y
+
+# Enable automatic security updates (Ubuntu)
+sudo apt install unattended-upgrades
+sudo dpkg-reconfigure --priority=low unattended-upgrades
+```
+
+### Wings Updates
+
+Update Wings regularly:
+
+```bash
+# Stop Wings
+sudo systemctl stop wings
+
+# Download latest
+curl -L -o /usr/local/bin/wings "https://github.com/pterodactyl/wings/releases/latest/download/wings_linux_$([[ "$(uname -m)" == "x86_64" ]] && echo "amd64" || echo "arm64")"
+
+# Set permissions
+sudo chmod +x /usr/local/bin/wings
+
+# Start Wings
+sudo systemctl start wings
+```
+
+Subscribe to [Wings releases](https://github.com/pterodactyl/wings/releases) for notifications.
+
+### Docker Security
+
+1. **Keep Docker updated**:
+```bash
+sudo apt update && sudo apt install docker-ce docker-ce-cli containerd.io
+```
+
+2. **Enable user namespace remapping**:
+
+```json
+// /etc/docker/daemon.json
+{
+  "userns-remap": "default"
+}
+```
+
+```bash
+sudo systemctl restart docker
+```
+
+3. **Use Docker rootless mode** (advanced):
+```bash
+curl -fsSL https://get.docker.com/rootless | sh
+```
+
+4. **Limit Docker daemon attack surface**:
+```json
+// /etc/docker/daemon.json
+{
+  "icc": false,
+  "userland-proxy": false,
+  "no-new-privileges": true
+}
+```
+
+### Kernel Security
+
+Enable security modules:
+
+**AppArmor (Ubuntu/Debian):**
+```bash
+sudo aa-enforce /etc/apparmor.d/*
+```
+
+**SELinux (CentOS/RHEL):**
+```bash
+sudo setenforce 1
+sudo sed -i 's/SELINUX=.*/SELINUX=enforcing/' /etc/selinux/config
+```
+
+### File System Security
+
+1. **Restrict permissions**:
+```bash
+sudo chmod 700 /var/lib/pterodactyl
+sudo chmod 700 /etc/pterodactyl
+```
+
+2. **Enable disk quotas** (if supported):
+```bash
+sudo apt install quota
+# Add usrquota,grpquota to /etc/fstab
+sudo quotacheck -cum /
+sudo quotaon /
+```
+
+3. **Monitor disk usage**:
+```bash
+df -h
+du -sh /var/lib/pterodactyl/volumes/*
+```
+
+## Container Isolation
+
+### Resource Limits
+
+Enforce container limits:
+
+```yaml
+docker:
+  container_pid_limit: 512  # Prevent fork bombs
+  tmpfs_size: 100           # Limit /tmp to 100MB
+```
+
+### Network Isolation
+
+Isolate containers from each other:
+
+```yaml
+docker:
+  network:
+    enable_icc: false  # Disable inter-container communication
+```
+
+### Rootless Containers
+
+For maximum security, run Wings in rootless mode:
+
+```yaml
+system:
+  user:
+    rootless:
+      enabled: true
+      container_uid: 0
+      container_gid: 0
+```
+
+**Requirements:**
+- Docker configured for rootless
+- Wings running as non-root user
+- Proper UID/GID mapping
+
+See [Permissions](/security/permissions) for configuration details.
+
+## Monitoring & Logging
+
+### Enable Logging
+
+Wings logs to `/var/log/pterodactyl/wings.log` by default.
+
+**Configure log rotation**:
+
+```yaml
+system:
+  enable_log_rotate: true  # Default
+```
+
+Wings automatically creates `/etc/logrotate.d/wings`:
+
+```
+/var/log/pterodactyl/wings.log {
+    size 10M
+    compress
+    delaycompress
+    dateext
+    maxage 7
+    missingok
+    notifempty
+    postrotate
+        /usr/bin/systemctl kill -s HUP wings.service >/dev/null 2>&1 || true
+    endscript
+}
+```
+
+### Monitor Logs
+
+**Real-time monitoring:**
+```bash
+sudo journalctl -u wings -f
+```
+
+**View recent errors:**
+```bash
+sudo journalctl -u wings -p err --since today
+```
+
+**Check Wings status:**
+```bash
+sudo systemctl status wings
+```
+
+### Intrusion Detection
+
+Install fail2ban for brute force protection:
+
+```bash
+sudo apt install fail2ban
+```
+
+Create `/etc/fail2ban/jail.d/wings-sftp.conf`:
+
+```ini
+[wings-sftp]
+enabled = true
+port = 2022
+logpath = /var/log/pterodactyl/wings.log
+maxretry = 5
+bantime = 3600
+```
+
+### System Monitoring
+
+Monitor system resources:
+
+```bash
+# CPU, Memory, Disk
+htop
+
+# Disk I/O
+iotop
+
+# Network
+iftop
+
+# Docker containers
+docker stats
+```
+
+Consider monitoring solutions:
+- Prometheus + Grafana
+- Netdata
+- Datadog
+- New Relic
+
+## Backup Security
+
+### Secure Backup Storage
+
+1. **Encrypt backups** at rest and in transit
+2. **Use dedicated credentials** for backup storage
+3. **Restrict backup access** to Wings only
+4. **Enable versioning** on S3/object storage
+
+### Local Backup Permissions
+
+```bash
+sudo chmod 700 /var/lib/pterodactyl/backups
+sudo chown pterodactyl:pterodactyl /var/lib/pterodactyl/backups
+```
+
+### Backup Configuration
+
+```yaml
+system:
+  backup_directory: /var/lib/pterodactyl/backups
+  backups:
+    write_limit: 50  # MB/s, prevent I/O saturation
+    compression_level: best_speed  # or best_compression
+```
+
+## Incident Response
+
+### Security Checklist
+
+If you suspect a compromise:
+
+1. **Isolate the system**:
+```bash
+sudo systemctl stop wings
+sudo iptables -A INPUT -j DROP
+```
+
+2. **Review logs**:
+```bash
+sudo journalctl -u wings --since "1 hour ago" > /tmp/wings-logs.txt
+sudo grep -r "error\|failed\|denied" /var/log/pterodactyl/
+```
+
+3. **Check for unauthorized access**:
+```bash
+sudo last -a
+sudo lastlog
+sudo grep -r "Accepted" /var/log/auth.log
+```
+
+4. **Verify file integrity**:
+```bash
+find /var/lib/pterodactyl -type f -mtime -1  # Files modified in last day
+```
+
+5. **Rotate credentials**:
+- Change Wings token
+- Regenerate SFTP host key
+- Revoke all WebSocket tokens
+
+6. **Update and patch**:
+```bash
+sudo apt update && sudo apt upgrade -y
+```
+
+### Contact Points
+
+- **Security issues**: security@pterodactyl.io
+- **Discord**: https://discord.gg/pterodactyl
+- **Documentation**: https://pterodactyl.io/wings
+
+## Compliance & Standards
+
+### PCI DSS Considerations
+
+If handling payment card data:
+
+1. **Encrypt all traffic** (TLS 1.2+)
+2. **Implement logging** and monitoring
+3. **Restrict network access** via firewall
+4. **Regular security updates**
+5. **Access control** and authentication
+
+### GDPR Compliance
+
+1. **Encrypt personal data** at rest and in transit
+2. **Implement access logging**
+3. **Data retention policies**
+4. **User data deletion** capabilities
+5. **Privacy by design**
+
+### SOC 2 Alignment
+
+1. **Access controls** (authentication, authorization)
+2. **Monitoring and logging**
+3. **Change management** (updates, patches)
+4. **Incident response** procedures
+5. **Data protection** (encryption, backups)
+
+## Configuration Review Checklist
+
+Use this checklist to verify your security configuration:
+
+- [ ] SSL/TLS enabled with valid certificates
+- [ ] Firewall configured and enabled
+- [ ] Strong authentication tokens in use
+- [ ] Trusted proxies configured (if applicable)
+- [ ] System and Wings regularly updated
+- [ ] Docker security hardening applied
+- [ ] Container resource limits enforced
+- [ ] File permissions properly restricted
+- [ ] Logging enabled and monitored
+- [ ] Backups encrypted and tested
+- [ ] Intrusion detection configured
+- [ ] Security updates automated
+- [ ] Incident response plan documented
+- [ ] Access to Wings API restricted to Panel IP
+- [ ] SFTP using key-based authentication
+
+## Additional Resources
+
+- [CIS Docker Benchmark](https://www.cisecurity.org/benchmark/docker)
+- [NIST Cybersecurity Framework](https://www.nist.gov/cyberframework)
+- [OWASP Top 10](https://owasp.org/www-project-top-ten/)
+- [Docker Security Best Practices](https://docs.docker.com/engine/security/)
+- [Pterodactyl Documentation](https://pterodactyl.io/)
+
+## Summary
+
+Key security principles for Wings:
+
+1. **Defense in depth**: Multiple security layers
+2. **Least privilege**: Minimal permissions required
+3. **Encryption everywhere**: TLS for all communications
+4. **Regular updates**: System, Wings, and Docker
+5. **Monitoring and logging**: Detect and respond to incidents
+6. **Isolation**: Containers, users, and networks
+7. **Strong authentication**: Tokens, keys, and validation
+8. **Backup and recovery**: Tested and encrypted
+
+Follow these practices to maintain a secure Wings deployment.

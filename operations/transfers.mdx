@@ -1,0 +1,542 @@
+---
+title: Server Transfers
+description: Transferring servers between Wings nodes
+---
+
+Wings supports live server transfers between nodes, allowing servers to be migrated without manual intervention.
+
+## Transfer Architecture
+
+### Transfer Structure
+
+```go
+type Transfer struct {
+    ctx    context.Context
+    cancel *context.CancelFunc
+    
+    Server  *server.Server
+    status  *system.Atomic[Status]
+    archive *Archive
+}
+```
+
+**Source:** `server/transfer/transfer.go:43-56`
+
+### Transfer States
+
+```go
+const (
+    StatusPending     Status = "pending"
+    StatusProcessing  Status = "processing"
+    StatusCancelling  Status = "cancelling"
+    StatusCancelled   Status = "cancelled"
+    StatusFailed      Status = "failed"
+    StatusCompleted   Status = "completed"
+)
+```
+
+**Source:** `server/transfer/transfer.go:23-40`
+
+## Transfer Process
+
+### Initiation (Source Node)
+
+Transfers are initiated via API:
+
+```bash
+POST /api/servers/{server}/transfer
+```
+
+<CodeGroup>
+```bash Request
+curl -X POST http://localhost:8080/api/servers/{server}/transfer \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://target-node.example.com/api/transfers",
+    "token": "transfer-auth-token"
+  }'
+```
+
+```json Response
+HTTP/1.1 202 Accepted
+```
+</CodeGroup>
+
+**Source:** `router/router.go:85`
+
+### Transfer Instance Creation
+
+```go
+func New(ctx context.Context, s *server.Server) *Transfer {
+    ctx, cancel := context.WithCancel(ctx)
+    
+    return &Transfer{
+        ctx:    ctx,
+        cancel: &cancel,
+        Server: s,
+        status: system.NewAtomic(StatusPending),
+    }
+}
+```
+
+**Source:** `server/transfer/transfer.go:59-69`
+
+## Archive Creation
+
+### Archive Structure
+
+```go
+type Archive struct {
+    archive *filesystem.Archive
+}
+
+func NewArchive(t *Transfer, size uint64) *Archive {
+    return &Archive{
+        archive: &filesystem.Archive{
+            Filesystem: t.Server.Filesystem(),
+            Progress:   progress.NewProgress(size),
+        },
+    }
+}
+```
+
+**Source:** `server/transfer/archive.go:29-42`
+
+### Getting Archive Instance
+
+```go
+func (t *Transfer) Archive() (*Archive, error) {
+    if t.archive == nil {
+        // Get server disk usage for progress calculation
+        rawSize, err := t.Server.Filesystem().DiskUsage(true)
+        if err != nil {
+            return nil, fmt.Errorf("transfer: failed to get server disk usage: %w", err)
+        }
+        
+        // Create archive instance
+        t.archive = NewArchive(t, uint64(rawSize))
+    }
+    
+    return t.archive, nil
+}
+```
+
+**Source:** `server/transfer/archive.go:14-27`
+
+### Streaming Archive
+
+```go
+func (a *Archive) Stream(ctx context.Context, w io.Writer) error {
+    return a.archive.Stream(ctx, w)
+}
+```
+
+**Features:**
+- Streams files directly to writer
+- No intermediate disk storage required
+- Progress tracking built-in
+- Context cancellation support
+
+**Source:** `server/transfer/archive.go:45-47`
+
+## Pushing to Target Node
+
+### Push Method
+
+```go
+func (t *Transfer) PushArchiveToTarget(url, token string) ([]byte, error) {
+    // 1. Set processing status
+    t.SetStatus(StatusProcessing)
+    
+    // 2. Get archive
+    a, _ := t.Archive()
+    
+    // 3. Create HTTP request
+    body, writer := io.Pipe()
+    req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, body)
+    req.Header.Set("Authorization", token)
+    
+    // 4. Create multipart writer
+    mp := multipart.NewWriter(writer)
+    req.Header.Set("Content-Type", mp.FormDataContentType())
+    
+    // 5. Stream archive in goroutine
+    go func() {
+        src, pw := io.Pipe()
+        h := sha256.New()
+        tee := io.TeeReader(src, h)
+        
+        // Create form file
+        dest, _ := mp.CreateFormFile("archive", "archive.tar.gz")
+        
+        // Copy with checksum calculation
+        go io.Copy(dest, tee)
+        
+        // Stream archive to pipe
+        a.Stream(ctx, pw)
+        
+        // Add checksum field
+        mp.WriteField("checksum", hex.EncodeToString(h.Sum(nil)))
+        mp.Close()
+    }()
+    
+    // 6. Send request
+    client := http.Client{Timeout: 0} // No timeout
+    res, _ := client.Do(req)
+    
+    return io.ReadAll(res.Body)
+}
+```
+
+**Source:** `server/transfer/source.go:19-166`
+
+### Progress Reporting
+
+Progress is sent to websocket every 5 seconds:
+
+```go
+go func(ctx context.Context, p *progress.Progress, tc *time.Ticker) {
+    defer tc.Stop()
+    
+    for {
+        select {
+        case <-ctx.Done():
+            return
+        case <-tc.C:
+            t.SendMessage("Uploading " + p.Progress(25))
+        }
+    }
+}(ctx2, a.Progress(), time.NewTicker(5*time.Second))
+```
+
+**Example Output:**
+```
+[Transfer System] [Source Node]: Uploading [=========>          ] 45.2%
+```
+
+**Source:** `server/transfer/source.go:37-48`
+
+## Transfer Authentication
+
+### Token Header
+
+Transfers use bearer token authentication:
+
+```go
+req.Header.Set("Authorization", token)
+```
+
+**Token Format:** Provided by Panel during transfer initialization
+
+**Source:** `server/transfer/source.go:58`
+
+### Multipart Form
+
+Archive sent as multipart form data:
+
+```go
+mp := multipart.NewWriter(writer)
+req.Header.Set("Content-Type", mp.FormDataContentType())
+
+// Archive file
+dest, err := mp.CreateFormFile("archive", "archive.tar.gz")
+
+// Checksum field
+mp.WriteField("checksum", hex.EncodeToString(h.Sum(nil)))
+```
+
+**Fields:**
+- `archive` - The tar.gz file
+- `checksum` - SHA256 hash of archive
+
+**Source:** `server/transfer/source.go:61-114`
+
+## Receiving Transfers (Target Node)
+
+### Endpoint
+
+```bash
+POST /api/transfers
+```
+
+Target node receives:
+- Multipart form with archive file
+- SHA256 checksum for validation
+- Server configuration from Panel
+
+**Source:** `router/router.go:55`
+
+## Transfer Cancellation
+
+### Cancel Method
+
+```go
+func (t *Transfer) Cancel() {
+    status := t.Status()
+    
+    // Don't cancel if already in final state
+    if status == StatusCancelling ||
+        status == StatusCancelled ||
+        status == StatusCompleted ||
+        status == StatusFailed {
+        return
+    }
+    
+    if t.cancel == nil {
+        return
+    }
+    
+    t.SetStatus(StatusCancelling)
+    (*t.cancel)()
+}
+```
+
+**Source:** `server/transfer/transfer.go:77-92`
+
+### API Endpoint
+
+```bash
+DELETE /api/servers/{server}/transfer
+```
+
+Cancels an in-progress transfer from source node.
+
+**Source:** `router/router.go:86`
+
+### Deleting Transfer (Target)
+
+```bash
+DELETE /api/transfers/{server}
+```
+
+Cancels/removes transfer on target node.
+
+**Source:** `router/router.go:64`
+
+## Status Management
+
+### Getting Status
+
+```go
+func (t *Transfer) Status() Status {
+    return t.status.Load()
+}
+```
+
+**Source:** `server/transfer/transfer.go:95-97`
+
+### Setting Status
+
+```go
+func (t *Transfer) SetStatus(s Status) {
+    t.status.Store(s)
+    t.Server.Events().Publish(server.TransferStatusEvent, s)
+}
+```
+
+**Websocket Event:** `transfer status`
+
+**Source:** `server/transfer/transfer.go:100-106`
+
+## Transfer Messages
+
+### Sending Messages
+
+```go
+func (t *Transfer) SendMessage(v string) {
+    t.Server.Events().Publish(
+        server.TransferLogsEvent,
+        colorstring.Color("[yellow][bold]"+time.Now().Format(time.RFC1123)+" [Transfer System] [Source Node]:[default] "+v),
+    )
+}
+```
+
+**Example Message:**
+```
+[yellow][bold]Mon, 02 Jan 2006 15:04:05 MST [Transfer System] [Source Node]:[default] Preparing to stream server data to destination...
+```
+
+**Source:** `server/transfer/transfer.go:109-114`
+
+### Error Logging
+
+```go
+func (t *Transfer) Error(err error, v string) {
+    t.Log().WithError(err).Error(v)
+    t.SendMessage(v)
+}
+```
+
+**Source:** `server/transfer/transfer.go:117-120`
+
+## Logging
+
+### Transfer Logger
+
+```go
+func (t *Transfer) Log() *log.Entry {
+    if t.Server == nil {
+        return log.WithField("subsystem", "transfer")
+    }
+    return t.Server.Log().WithField("subsystem", "transfer")
+}
+```
+
+**Log Fields:**
+- `server` - Server UUID
+- `subsystem` - "transfer"
+
+**Source:** `server/transfer/transfer.go:123-129`
+
+## Transfer Context
+
+### Context Management
+
+```go
+func (t *Transfer) Context() context.Context {
+    return t.ctx
+}
+```
+
+Transfer context:
+- Cancellable via `Cancel()` method
+- Inherits from server context
+- Cancels all ongoing operations when triggered
+
+**Source:** `server/transfer/transfer.go:72-74`
+
+## Websocket Events
+
+### Status Events
+
+```go
+t.Server.Events().Publish(server.TransferStatusEvent, s)
+```
+
+**Event Name:** `transfer status`
+
+**Payload:** Status string (`pending`, `processing`, `completed`, etc.)
+
+### Log Events
+
+```go
+t.Server.Events().Publish(server.TransferLogsEvent, message)
+```
+
+**Event Name:** `transfer logs`
+
+**Payload:** Formatted log message with timestamp
+
+## Server State During Transfer
+
+### Transfer Flag
+
+```go
+func (s *Server) IsTransferring() bool {
+    return s.transferring.Load()
+}
+
+func (s *Server) SetTransferring(state bool) {
+    s.transferring.Store(state)
+}
+```
+
+**Source:** `server/install.go:146-152`
+
+### Blocked Operations
+
+Power actions are blocked during transfers:
+
+```go
+func (s *Server) HandlePowerAction(action PowerAction, waitSeconds ...int) error {
+    if s.IsTransferring() {
+        return ErrServerIsTransferring
+    }
+}
+```
+
+**Source:** `server/power.go:57-64`
+
+## HTTP Configuration
+
+### Client Settings
+
+```go
+client := http.Client{Timeout: 0}
+```
+
+**Timeout:** Unlimited (0) - transfers can take hours
+
+**Source:** `server/transfer/source.go:129`
+
+### Request Headers
+
+```http
+POST /api/transfers HTTP/1.1
+Authorization: {token}
+Content-Type: multipart/form-data; boundary={boundary}
+```
+
+## Checksum Validation
+
+### SHA256 Calculation
+
+```go
+h := sha256.New()
+tee := io.TeeReader(src, h)
+
+// ... copy data through tee reader ...
+
+checksum := hex.EncodeToString(h.Sum(nil))
+mp.WriteField("checksum", checksum)
+```
+
+**Algorithm:** SHA256
+
+**Format:** Hexadecimal string
+
+**Source:** `server/transfer/source.go:77-114`
+
+## Error Handling
+
+### Common Transfer Errors
+
+```go
+if res.StatusCode != http.StatusOK {
+    return nil, fmt.Errorf("unexpected status code from destination: %d", res.StatusCode)
+}
+```
+
+**Error Conditions:**
+- Failed to get server disk usage
+- Failed to create archive
+- Failed to stream archive
+- HTTP errors from target node
+- Context cancellation
+- Checksum validation failure
+
+**Source:** `server/transfer/source.go:135-161`
+
+## Best Practices
+
+### Pre-Transfer
+
+1. Ensure sufficient disk space on target node
+2. Verify network connectivity between nodes
+3. Stop server before transfer (optional but recommended)
+4. Check server isn't installing/restoring
+
+### During Transfer
+
+1. Monitor websocket events for progress
+2. Don't attempt power actions
+3. Don't delete server on either node
+4. Ensure stable network connection
+
+### Post-Transfer
+
+1. Verify server files on target node
+2. Start server to test functionality
+3. Clean up source node (handled by Panel)
+4. Update DNS/proxy configurations if needed

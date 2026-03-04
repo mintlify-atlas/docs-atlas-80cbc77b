@@ -1,97 +1,223 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "Pterodactyl Wings Documentation"
+description: "High-performance server control plane for Pterodactyl Panel with Docker integration and built-in SFTP server"
+mode: "custom"
 ---
 
-## Setting up
+<div className="relative overflow-hidden dark:bg-[#0f1117] bg-white">
+  {/* Hero Section */}
+  <div className="relative bg-gradient-to-br from-[#9a5c2b] via-[#8a4c1b] to-[#7a3c0b] dark:from-[#9a5c2b] dark:via-[#8a4c1b] dark:to-[#7a3c0b] py-20 px-4 sm:px-6 lg:px-8">
+    <div className="absolute inset-0 bg-black/20"></div>
+    <div className="relative max-w-7xl mx-auto">
+      <div className="text-center">
+        <h1 className="text-4xl sm:text-5xl md:text-6xl font-bold text-white mb-6">
+          Pterodactyl Wings
+        </h1>
+        <p className="text-xl sm:text-2xl text-white/90 max-w-3xl mx-auto mb-8">
+          The server control plane built for the rapidly changing gaming industry. High-performance, secure, and designed for Docker.
+        </p>
+        <div className="flex flex-wrap gap-4 justify-center">
+          <a 
+            href="/quickstart" 
+            className="inline-flex items-center px-8 py-3 rounded-lg bg-white text-[#9a5c2b] font-semibold hover:bg-gray-100 transition-colors no-underline"
+          >
+            Get Started
+          </a>
+          <a 
+            href="/api/overview" 
+            className="inline-flex items-center px-8 py-3 rounded-lg border-2 border-white/30 bg-white/10 text-white font-semibold hover:bg-white/20 transition-colors no-underline"
+          >
+            API Reference
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
 
-Get your documentation site up and running in minutes.
+  {/* Quick Start Section */}
+  <div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+    <div className="text-center mb-12">
+      <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">Quick Start</h2>
+      <p className="text-lg text-gray-600 dark:text-gray-400 max-w-2xl mx-auto">
+        Get Wings up and running in minutes with our step-by-step guide
+      </p>
+    </div>
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
+    <Steps>
+      <Step title="Install Wings">
+        Download and install Wings on your server. Wings requires Docker and a Linux-based operating system.
 
-## Make it yours
+        ```bash
+        curl -L -o /usr/local/bin/wings "https://github.com/pterodactyl/wings/releases/latest/download/wings_linux_$([[ "$(uname -m)" == "x86_64" ]] && echo "amd64" || echo "arm64")"
+        chmod u+x /usr/local/bin/wings
+        ```
+      </Step>
 
-Design a docs site that looks great and empowers your users.
+      <Step title="Configure Wings">
+        Create your configuration file and connect Wings to your Pterodactyl Panel instance.
 
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
-  </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
-  </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
-  </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
-  </Card>
-</Columns>
+        ```bash
+        wings configure
+        ```
 
-## Create beautiful pages
+        This interactive command will prompt you for your Panel URL and authentication token.
+      </Step>
 
-Everything you need to create world-class documentation.
+      <Step title="Start Wings">
+        Launch the Wings daemon to begin managing game servers.
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+        ```bash
+        wings
+        ```
 
-## Need inspiration?
+        Wings will connect to your Panel, sync server configurations, and start managing Docker containers.
+      </Step>
+    </Steps>
+  </div>
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+  {/* Core Features Section */}
+  <div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+    <div className="text-center mb-12">
+      <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">Core Features</h2>
+      <p className="text-lg text-gray-600 dark:text-gray-400 max-w-2xl mx-auto">
+        Everything you need to manage game servers at scale
+      </p>
+    </div>
+
+    <CardGroup cols={2}>
+      <Card title="Docker Integration" icon="docker" href="/concepts/docker-integration">
+        Isolate game servers in Docker containers with full resource management and security controls
+      </Card>
+      <Card title="Built-in SFTP Server" icon="server" href="/configuration/sftp-settings">
+        No dependencies required — Wings includes a complete SFTP server with Panel authentication
+      </Card>
+      <Card title="RESTful API" icon="code" href="/api/overview">
+        Control every aspect of the server lifecycle through a comprehensive HTTP API
+      </Card>
+      <Card title="Real-time Console" icon="terminal" href="/api/servers/websocket">
+        Stream server console output and send commands via WebSocket connections
+      </Card>
+      <Card title="Backup Management" icon="floppy-disk" href="/operations/backups">
+        Automated backup creation, restoration, and compression with multiple storage backends
+      </Card>
+      <Card title="Server Transfers" icon="truck" href="/operations/transfers">
+        Seamlessly migrate servers between Wings nodes with zero downtime
+      </Card>
+    </CardGroup>
+  </div>
+
+  {/* Documentation Navigation Section */}
+  <div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+    <div className="text-center mb-12">
+      <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">Explore Documentation</h2>
+      <p className="text-lg text-gray-600 dark:text-gray-400 max-w-2xl mx-auto">
+        Find what you need to deploy, configure, and maintain Wings
+      </p>
+    </div>
+
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <a 
+        href="/installation/requirements"
+        className="group block rounded-2xl border dark:border-[#27272a] border-gray-200 dark:hover:border-[#9a5c2b] hover:border-[#9a5c2b] overflow-hidden transition-colors no-underline dark:bg-[#1a1d27] bg-gray-50"
+      >
+        <div className="h-56 dark:bg-[#242838] bg-gray-100 flex items-center justify-center overflow-hidden">
+          <div className="text-6xl">⚙️</div>
+        </div>
+        <div className="p-6">
+          <h3 className="text-base font-semibold dark:text-gray-100 text-gray-900 mb-2">Installation</h3>
+          <p className="text-sm dark:text-gray-400 text-gray-600 mb-3">
+            System requirements, installation steps, and initial configuration for Wings
+          </p>
+          <span className="text-sm dark:text-gray-400 text-gray-600 dark:group-hover:text-[#9a5c2b] group-hover:text-[#9a5c2b] transition-colors inline-flex items-center">
+            Get started
+            <svg className="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+          </span>
+        </div>
+      </a>
+
+      <a 
+        href="/concepts/architecture"
+        className="group block rounded-2xl border dark:border-[#27272a] border-gray-200 dark:hover:border-[#9a5c2b] hover:border-[#9a5c2b] overflow-hidden transition-colors no-underline dark:bg-[#1a1d27] bg-gray-50"
+      >
+        <div className="h-56 dark:bg-[#242838] bg-gray-100 flex items-center justify-center overflow-hidden">
+          <div className="text-6xl">🏗️</div>
+        </div>
+        <div className="p-6">
+          <h3 className="text-base font-semibold dark:text-gray-100 text-gray-900 mb-2">Core Concepts</h3>
+          <p className="text-sm dark:text-gray-400 text-gray-600 mb-3">
+            Learn how Wings manages servers, Docker containers, and file systems
+          </p>
+          <span className="text-sm dark:text-gray-400 text-gray-600 dark:group-hover:text-[#9a5c2b] group-hover:text-[#9a5c2b] transition-colors inline-flex items-center">
+            Learn more
+            <svg className="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+          </span>
+        </div>
+      </a>
+
+      <a 
+        href="/api/overview"
+        className="group block rounded-2xl border dark:border-[#27272a] border-gray-200 dark:hover:border-[#9a5c2b] hover:border-[#9a5c2b] overflow-hidden transition-colors no-underline dark:bg-[#1a1d27] bg-gray-50"
+      >
+        <div className="h-56 dark:bg-[#242838] bg-gray-100 flex items-center justify-center overflow-hidden">
+          <div className="text-6xl">📡</div>
+        </div>
+        <div className="p-6">
+          <h3 className="text-base font-semibold dark:text-gray-100 text-gray-900 mb-2">API Reference</h3>
+          <p className="text-sm dark:text-gray-400 text-gray-600 mb-3">
+            Complete HTTP API documentation with endpoints, parameters, and examples
+          </p>
+          <span className="text-sm dark:text-gray-400 text-gray-600 dark:group-hover:text-[#9a5c2b] group-hover:text-[#9a5c2b] transition-colors inline-flex items-center">
+            View API docs
+            <svg className="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+          </span>
+        </div>
+      </a>
+    </div>
+  </div>
+
+  {/* Resources Section */}
+  <div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+    <div className="text-center mb-12">
+      <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-4">Resources & Support</h2>
+      <p className="text-lg text-gray-600 dark:text-gray-400 max-w-2xl mx-auto">
+        Get help and connect with the Pterodactyl community
+      </p>
+    </div>
+
+    <CardGroup cols={3}>
+      <Card title="GitHub Repository" icon="github" href="https://github.com/pterodactyl/wings">
+        View source code, report issues, and contribute to Wings development
+      </Card>
+      <Card title="Discord Community" icon="discord" href="https://discord.gg/pterodactyl">
+        Join thousands of users and get real-time help from the community
+      </Card>
+      <Card title="Security Policy" icon="shield" href="https://github.com/pterodactyl/panel/security/policy">
+        Report security vulnerabilities responsibly through our security policy
+      </Card>
+    </CardGroup>
+  </div>
+
+  {/* Final CTA Section */}
+  <div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+    <div className="rounded-2xl dark:bg-gradient-to-r dark:from-[#9a5c2b] dark:to-[#7a3c0b] bg-gradient-to-r from-[#9a5c2b] to-[#7a3c0b] p-8 sm:p-12 text-center">
+      <h2 className="text-3xl font-bold text-white mb-4">
+        Ready to Deploy Wings?
+      </h2>
+      <p className="text-lg text-white/90 max-w-2xl mx-auto mb-8">
+        Follow our quickstart guide to get Wings running on your infrastructure in minutes
+      </p>
+      <a 
+        href="/quickstart" 
+        className="inline-flex items-center px-8 py-3 rounded-lg bg-white text-[#9a5c2b] font-semibold hover:bg-gray-100 transition-colors no-underline"
+      >
+        Start Now
+      </a>
+    </div>
+  </div>
+</div>

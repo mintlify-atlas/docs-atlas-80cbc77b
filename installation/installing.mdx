@@ -1,0 +1,369 @@
+---
+title: Installing Wings
+description: Step-by-step guide to download and install Pterodactyl Wings
+---
+
+This guide covers the installation of Wings on your server. Wings is distributed as a single binary that can be downloaded from GitHub releases.
+
+## Prerequisites
+
+Before installing Wings, ensure you have:
+
+<Steps>
+  <Step title="Met System Requirements">
+    Review and meet all [system requirements](/installation/requirements)
+  </Step>
+  
+  <Step title="Installed Docker">
+    Docker must be installed and running on your system
+  </Step>
+  
+  <Step title="Root or Sudo Access">
+    Installation requires root privileges
+  </Step>
+</Steps>
+
+## Installation Methods
+
+Wings can be installed using several methods:
+
+<Tabs>
+  <Tab title="Binary Download (Recommended)">
+    Download the pre-compiled binary from GitHub releases.
+    
+    ### Download Latest Release
+    
+    ```bash
+    # Create installation directory
+    sudo mkdir -p /usr/local/bin
+    
+    # Download Wings (AMD64)
+    sudo curl -L -o /usr/local/bin/wings "https://github.com/pterodactyl/wings/releases/latest/download/wings_linux_amd64"
+    
+    # Make it executable
+    sudo chmod +x /usr/local/bin/wings
+    ```
+    
+    <Accordion title="ARM64 Installation">
+    For ARM64 systems, use the ARM64 binary:
+    
+    ```bash
+    sudo curl -L -o /usr/local/bin/wings "https://github.com/pterodactyl/wings/releases/latest/download/wings_linux_arm64"
+    sudo chmod +x /usr/local/bin/wings
+    ```
+    </Accordion>
+  </Tab>
+  
+  <Tab title="Docker">
+    Run Wings in a Docker container using the official image.
+    
+    ### Using Docker Compose
+    
+    Create a `docker-compose.yml` file:
+    
+    ```yaml docker-compose.yml
+    version: '3.8'
+    
+    services:
+      wings:
+        image: ghcr.io/pterodactyl/wings:latest
+        restart: always
+        networks:
+          - wings0
+        ports:
+          - "8080:8080"
+          - "2022:2022"
+        tty: true
+        environment:
+          TZ: "UTC"
+          WINGS_UID: 988
+          WINGS_GID: 988
+          WINGS_USERNAME: pterodactyl
+        volumes:
+          - "/var/run/docker.sock:/var/run/docker.sock"
+          - "/var/lib/docker/containers/:/var/lib/docker/containers/"
+          - "/etc/pterodactyl/:/etc/pterodactyl/"
+          - "/var/lib/pterodactyl/:/var/lib/pterodactyl/"
+          - "/var/log/pterodactyl/:/var/log/pterodactyl/"
+          - "/tmp/pterodactyl/:/tmp/pterodactyl/"
+          - "/etc/ssl/certs:/etc/ssl/certs:ro"
+          - "/run/wings:/run/wings"
+    
+    networks:
+      wings0:
+        name: wings0
+        driver: bridge
+        ipam:
+          config:
+            - subnet: "172.21.0.0/16"
+        driver_opts:
+          com.docker.network.bridge.name: wings0
+    ```
+    
+    Start Wings:
+    
+    ```bash
+    docker-compose up -d
+    ```
+  </Tab>
+  
+  <Tab title="Build from Source">
+    Build Wings from source code.
+    
+    ### Requirements
+    
+    - Go 1.24.0 or higher
+    - Git
+    - Make
+    
+    ### Build Steps
+    
+    ```bash
+    # Install Go (if not installed)
+    # Visit https://golang.org/doc/install
+    
+    # Clone the repository
+    git clone https://github.com/pterodactyl/wings.git
+    cd wings
+    
+    # Build for your architecture
+    make build
+    
+    # The binary will be in build/wings_linux_amd64
+    sudo cp build/wings_linux_amd64 /usr/local/bin/wings
+    sudo chmod +x /usr/local/bin/wings
+    ```
+  </Tab>
+</Tabs>
+
+## Verify Installation
+
+Check that Wings is installed correctly:
+
+```bash
+wings version
+```
+
+You should see output similar to:
+
+```
+wings v1.12.1
+Copyright © 2018 - 2026 Dane Everitt & Contributors
+```
+
+## Create Required Directories
+
+Wings requires several directories to operate. Create them manually:
+
+```bash
+# Create configuration directory
+sudo mkdir -p /etc/pterodactyl
+
+# Create data directories
+sudo mkdir -p /var/lib/pterodactyl/volumes
+sudo mkdir -p /var/lib/pterodactyl/backups
+sudo mkdir -p /var/lib/pterodactyl/archives
+
+# Create log directory
+sudo mkdir -p /var/log/pterodactyl
+
+# Create temporary directory
+sudo mkdir -p /tmp/pterodactyl
+
+# Create runtime directories
+sudo mkdir -p /run/wings/etc
+sudo mkdir -p /run/wings/machine-id
+```
+
+<Note>
+Wings automatically creates these directories on startup (see config/config.go:629), but creating them manually ensures proper permissions.
+</Note>
+
+## Set Up Systemd Service
+
+For production use, configure Wings to run as a systemd service.
+
+### Create Service File
+
+Create `/etc/systemd/system/wings.service`:
+
+```ini /etc/systemd/system/wings.service
+[Unit]
+Description=Pterodactyl Wings Daemon
+After=docker.service
+Requires=docker.service
+PartOf=docker.service
+
+[Service]
+User=root
+WorkingDirectory=/etc/pterodactyl
+LimitNOFILE=4096
+PIDFile=/var/run/wings/daemon.pid
+ExecStart=/usr/local/bin/wings
+Restart=on-failure
+StartLimitInterval=180
+StartLimitBurst=30
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+```
+
+<Info>
+Wings must run as root to manage Docker containers and create the pterodactyl system user (see config/config.go:480).
+</Info>
+
+### Enable and Start Service
+
+```bash
+# Reload systemd
+sudo systemctl daemon-reload
+
+# Enable Wings to start on boot
+sudo systemctl enable wings
+
+# Start Wings (after configuration)
+# sudo systemctl start wings
+```
+
+<Warning>
+Do not start Wings yet! You need to configure it first. See [Configuration](/installation/configuration).
+</Warning>
+
+## Alternative Service Configurations
+
+### Using Systemd Credentials
+
+For enhanced security, use systemd's credential loading (see config/config.go:841):
+
+```ini /etc/systemd/system/wings.service
+[Unit]
+Description=Pterodactyl Wings Daemon
+After=docker.service
+Requires=docker.service
+
+[Service]
+User=root
+WorkingDirectory=/etc/pterodactyl
+LimitNOFILE=4096
+PIDFile=/var/run/wings/daemon.pid
+ExecStart=/usr/local/bin/wings
+Restart=on-failure
+StartLimitInterval=180
+StartLimitBurst=30
+RestartSec=5s
+
+# Load credentials from files
+LoadCredential=token_id:/etc/pterodactyl/credentials/token_id
+LoadCredential=token:/etc/pterodactyl/credentials/token
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Then in your configuration file, reference the credentials:
+
+```yaml config.yml
+token_id: 'file://${CREDENTIALS_DIRECTORY}/token_id'
+token: 'file://${CREDENTIALS_DIRECTORY}/token'
+```
+
+## Configure Log Rotation
+
+Wings automatically configures log rotation if logrotate is available (see config/config.go:695). To manually verify:
+
+```bash
+# Check if logrotate configuration was created
+cat /etc/logrotate.d/wings
+```
+
+The automatic configuration:
+- Rotates logs at 10 MB
+- Compresses old logs
+- Keeps logs for 7 days
+- Sends HUP signal to Wings on rotation
+
+## Testing the Installation
+
+Before configuring Wings, test that it runs:
+
+```bash
+sudo wings --help
+```
+
+Available commands:
+
+| Command | Description |
+|---------|-------------|
+| `wings` | Start the Wings daemon |
+| `wings version` | Display version information |
+| `wings configure` | Auto-configure from Panel |
+| `wings diagnostics` | Generate diagnostic report |
+
+### Useful Flags
+
+| Flag | Description |
+|------|-------------|
+| `--config <path>` | Specify config file location (default: `/etc/pterodactyl/config.yml`) |
+| `--debug` | Enable debug mode |
+| `--auto-tls` | Enable automatic Let's Encrypt SSL |
+| `--tls-hostname <hostname>` | Hostname for auto-TLS |
+
+## Troubleshooting Installation
+
+<AccordionGroup>
+  <Accordion title="Permission Denied Error">
+    Ensure the Wings binary is executable:
+    
+    ```bash
+    sudo chmod +x /usr/local/bin/wings
+    ```
+  </Accordion>
+  
+  <Accordion title="Docker Not Found">
+    Wings requires Docker to be installed and running:
+    
+    ```bash
+    # Check Docker status
+    sudo systemctl status docker
+    
+    # Start Docker if needed
+    sudo systemctl start docker
+    ```
+  </Accordion>
+  
+  <Accordion title="Binary Won't Execute">
+    Verify you downloaded the correct architecture:
+    
+    ```bash
+    # Check system architecture
+    uname -m
+    
+    # Should be x86_64 for amd64 or aarch64 for arm64
+    ```
+  </Accordion>
+  
+  <Accordion title="Systemd Service Fails">
+    Check the service status and logs:
+    
+    ```bash
+    # View service status
+    sudo systemctl status wings
+    
+    # View logs
+    sudo journalctl -u wings -n 50
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Configuration" icon="gear" href="/installation/configuration">
+    Configure Wings for your environment
+  </Card>
+  
+  <Card title="Panel Configuration" icon="server" href="/installation/panel-configuration">
+    Set up Wings in your Panel
+  </Card>
+</CardGroup>

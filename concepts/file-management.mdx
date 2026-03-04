@@ -1,0 +1,718 @@
+---
+title: File Management
+description: How Wings handles filesystem operations, permissions, and SFTP access
+---
+
+Pterodactyl Wings provides comprehensive file management capabilities for game servers, including direct file operations, SFTP access, and disk quota enforcement. The filesystem implementation is designed for security, performance, and safety.
+
+## Filesystem Architecture
+
+Each server has its own isolated filesystem instance that wraps a Unix filesystem implementation.
+
+### Filesystem Structure
+
+```go
+// From server/filesystem/filesystem.go:24-34
+type Filesystem struct {
+    unixFS *ufs.Quota
+    
+    mu                sync.RWMutex
+    lastLookupTime    *usageLookupTime
+    lookupInProgress  atomic.Bool
+    diskCheckInterval time.Duration
+    denylist          *ignore.GitIgnore
+    
+    isTest bool
+}
+```
+
+**Key Components:**
+- `unixFS` - Core Unix filesystem with quota tracking
+- `denylist` - Files/patterns that cannot be modified (egg-defined)
+- `lastLookupTime` - Tracks disk usage calculation timing
+- `lookupInProgress` - Prevents concurrent disk scans
+
+### Initialization
+
+```go
+// From server/filesystem/filesystem.go:37-54
+func New(root string, size int64, denylist []string) (*Filesystem, error) {
+    if err := os.MkdirAll(root, 0o755); err != nil {
+        return nil, err
+    }
+    
+    unixFS, err := ufs.NewUnixFS(root, config.UseOpenat2())
+    if err != nil {
+        return nil, err
+    }
+    
+    quota := ufs.NewQuota(unixFS, size)
+    
+    return &Filesystem{
+        unixFS:            quota,
+        diskCheckInterval: time.Duration(config.Get().System.DiskCheckInterval),
+        lastLookupTime:    &usageLookupTime{},
+        denylist:          ignore.CompileIgnoreLines(denylist...),
+    }, nil
+}
+```
+
+**Path Convention:**
+```
+/var/lib/pterodactyl/volumes/{server-uuid}/
+```
+
+Each server gets its own directory under the configured data path.
+
+## File Operations
+
+### Reading Files
+
+Files are accessed through the filesystem wrapper for safety:
+
+```go
+// From server/filesystem/filesystem.go:75-86
+func (fs *Filesystem) File(p string) (ufs.File, Stat, error) {
+    f, err := fs.unixFS.Open(p)
+    if err != nil {
+        return nil, Stat{}, err
+    }
+    
+    st, err := statFromFile(f)
+    if err != nil {
+        _ = f.Close()
+        return nil, Stat{}, err
+    }
+    
+    return f, st, nil
+}
+```
+
+This returns both a file handle and stat information in one operation.
+
+### Writing Files
+
+File writes include automatic quota checking:
+
+```go
+// From server/filesystem/filesystem.go:140-187
+func (fs *Filesystem) Write(p string, r io.Reader, newSize int64, mode ufs.FileMode) error {
+    var currentSize int64
+    
+    // Get current file size if it exists
+    st, err := fs.unixFS.Stat(p)
+    if err != nil && !errors.Is(err, ufs.ErrNotExist) {
+        return errors.Wrap(err, "failed to stat file")
+    } else if err == nil {
+        if st.IsDir() {
+            return errors.WithStack(&Error{code: ErrCodeIsDirectory})
+        }
+        currentSize = st.Size()
+    }
+    
+    // Check that the new size can fit
+    if err := fs.HasSpaceFor(newSize - currentSize); err != nil {
+        return err
+    }
+    
+    // Create or truncate the file
+    file, err := fs.unixFS.Touch(p, ufs.O_RDWR|ufs.O_TRUNC, mode)
+    if err != nil {
+        return err
+    }
+    defer file.Close()
+    
+    if newSize == 0 {
+        // Subtract the previous size
+        fs.unixFS.Add(-currentSize)
+    } else {
+        // Copy data with limit
+        var n int64
+        n, err = io.Copy(file, io.LimitReader(r, newSize))
+        
+        // Adjust disk usage
+        fs.unixFS.Add(n - currentSize)
+    }
+    
+    // Set correct ownership
+    if err := fs.chownFile(p); err != nil {
+        return err
+    }
+    
+    return err
+}
+```
+
+**Write Process:**
+1. Check current file size (if exists)
+2. Verify new size fits within quota
+3. Create/truncate file
+4. Copy data (limited to newSize)
+5. Update quota tracking
+6. Fix file ownership
+
+### Creating Directories
+
+```go
+// From server/filesystem/filesystem.go:190-193
+func (fs *Filesystem) CreateDirectory(name string, p string) error {
+    return fs.unixFS.MkdirAll(filepath.Join(p, name), 0o755)
+}
+```
+
+Directories are created with parent directories as needed.
+
+### Copying Files
+
+The copy operation creates a uniquely named duplicate:
+
+```go
+// From server/filesystem/filesystem.go:302-362
+func (fs *Filesystem) Copy(p string) error {
+    dirfd, name, closeFd, err := fs.unixFS.SafePath(p)
+    defer closeFd()
+    if err != nil {
+        return err
+    }
+    
+    source, err := fs.unixFS.OpenFileat(dirfd, name, ufs.O_RDONLY, 0)
+    if err != nil {
+        return err
+    }
+    defer source.Close()
+    
+    info, err := source.Stat()
+    if err != nil {
+        return err
+    }
+    
+    if info.IsDir() || !info.Mode().IsRegular() {
+        return ufs.ErrNotExist
+    }
+    
+    currentSize := info.Size()
+    
+    // Check quota
+    if err := fs.HasSpaceFor(currentSize); err != nil {
+        return err
+    }
+    
+    // Generate copy name ("file.txt" -> "file copy.txt")
+    base := info.Name()
+    extension := filepath.Ext(base)
+    baseName := strings.TrimSuffix(base, extension)
+    
+    // Handle .tar.gz style extensions
+    if strings.HasSuffix(baseName, ".tar") {
+        extension = ".tar" + extension
+        baseName = strings.TrimSuffix(baseName, ".tar")
+    }
+    
+    newName, err := fs.findCopySuffix(dirfd, baseName, extension)
+    if err != nil {
+        return err
+    }
+    
+    dst, err := fs.unixFS.OpenFileat(dirfd, newName, ufs.O_WRONLY|ufs.O_CREATE, info.Mode())
+    if err != nil {
+        return err
+    }
+    
+    n, err := io.Copy(dst, io.LimitReader(source, currentSize))
+    fs.unixFS.Add(n)
+    
+    // Fix ownership
+    if !fs.isTest {
+        fs.unixFS.Lchownat(dirfd, newName, config.Get().System.User.Uid, config.Get().System.User.Gid)
+    }
+    
+    return err
+}
+```
+
+**Copy Naming:**
+- `file.txt` → `file copy.txt`
+- `file copy.txt` → `file copy 2.txt`
+- `file copy 2.txt` → `file copy 3.txt`
+- After 50 attempts: `file copy.2026-03-04T10:30:00Z.txt`
+
+### Deleting Files
+
+```go
+// From server/filesystem/filesystem.go:390-392
+func (fs *Filesystem) Delete(p string) error {
+    return fs.unixFS.RemoveAll(p)
+}
+```
+
+Deletion removes files or entire directory trees.
+
+### Renaming Files
+
+```go
+// From server/filesystem/filesystem.go:195-197
+func (fs *Filesystem) Rename(oldpath, newpath string) error {
+    return fs.unixFS.Rename(oldpath, newpath)
+}
+```
+
+## File Permissions
+
+### Ownership Management
+
+All files must be owned by the configured Wings user:
+
+```go
+// From server/filesystem/filesystem.go:203-211
+func (fs *Filesystem) chownFile(name string) error {
+    if fs.isTest {
+        return nil
+    }
+    
+    uid := config.Get().System.User.Uid
+    gid := config.Get().System.User.Gid
+    return fs.unixFS.Lchown(name, uid, gid)
+}
+```
+
+### Recursive Ownership
+
+The `Chown` function recursively sets ownership:
+
+```go
+// From server/filesystem/filesystem.go:217-259
+func (fs *Filesystem) Chown(p string) error {
+    if fs.isTest {
+        return nil
+    }
+    
+    uid := config.Get().System.User.Uid
+    gid := config.Get().System.User.Gid
+    
+    dirfd, name, closeFd, err := fs.unixFS.SafePath(p)
+    defer closeFd()
+    if err != nil {
+        return err
+    }
+    
+    // Chown the initial path
+    if err := fs.unixFS.Lchownat(dirfd, name, uid, gid); err != nil {
+        return errors.Wrap(err, "failed to chown path")
+    }
+    
+    // Check if it's a directory
+    if st, err := fs.unixFS.Lstatat(dirfd, name); err != nil || !st.IsDir() {
+        return nil
+    }
+    
+    // Walk and chown everything inside
+    if err := fs.unixFS.WalkDirat(dirfd, name, func(dirfd int, name, _ string, info ufs.DirEntry, err error) error {
+        if err != nil {
+            return err
+        }
+        if err := fs.unixFS.Lchownat(dirfd, name, uid, gid); err != nil {
+            return err
+        }
+        return nil
+    }); err != nil {
+        return fmt.Errorf("failed to chown during walk: %w", err)
+    }
+    
+    return nil
+}
+```
+
+**Performance Optimization:**
+The walker uses an internally reused buffer and direct syscalls via `dirfd`, making it highly efficient for large directory trees.
+
+### Permission Modes
+
+File modes can be changed:
+
+```go
+// From server/filesystem/filesystem.go:261-263
+func (fs *Filesystem) Chmod(path string, mode ufs.FileMode) error {
+    return fs.unixFS.Chmod(path, mode)
+}
+```
+
+## Directory Listing
+
+Listing directories returns enriched stat information:
+
+```go
+// From server/filesystem/filesystem.go:423-490
+func (fs *Filesystem) ListDirectory(p string) ([]Stat, error) {
+    // Read entries and map to Stat
+    out, err := ufs.ReadDirMap(fs.unixFS.UnixFS, p, func(e ufs.DirEntry) (Stat, error) {
+        info, err := e.Info()
+        if err != nil {
+            return Stat{}, err
+        }
+        
+        // Determine mimetype
+        var d string
+        if e.Type().IsDir() {
+            d = "inode/directory"
+        } else {
+            d = "application/octet-stream"
+        }
+        
+        var m *mimetype.MIME
+        if e.Type().IsRegular() {
+            // Detect mimetype from file content
+            eO := e.(interface {
+                Open() (ufs.File, error)
+            })
+            f, err := eO.Open()
+            if err != nil {
+                return Stat{}, err
+            }
+            m, err = mimetype.DetectReader(f)
+            if err != nil {
+                log.Error(err.Error())
+            }
+            _ = f.Close()
+        }
+        
+        st := Stat{FileInfo: info, Mimetype: d}
+        if m != nil {
+            st.Mimetype = m.String()
+        }
+        return st, nil
+    })
+    if err != nil {
+        return nil, err
+    }
+    
+    // Sort alphabetically
+    slices.SortStableFunc(out, func(a, b Stat) int {
+        switch {
+        case a.Name() == b.Name():
+            return 0
+        case a.Name() > b.Name():
+            return 1
+        default:
+            return -1
+        }
+    })
+    
+    // Sort folders first
+    slices.SortStableFunc(out, func(a, b Stat) int {
+        switch {
+        case a.IsDir() && b.IsDir():
+            return 0
+        case a.IsDir():
+            return -1
+        default:
+            return 1
+        }
+    })
+    
+    return out, nil
+}
+```
+
+**Returned Information:**
+- File name
+- File size
+- Modification time
+- Permissions
+- Mimetype (detected from content)
+- Is directory
+
+**Sorting Order:**
+1. Directories before files
+2. Alphabetically within each group
+
+## Disk Quota Management
+
+Wings enforces disk quotas by tracking usage in memory and performing periodic recalculations.
+
+### Quota Structure
+
+The quota system wraps the Unix filesystem:
+
+```go
+type Quota struct {
+    *UnixFS
+    limit int64        // Quota limit in bytes
+    usage atomic.Int64 // Current usage
+}
+```
+
+### Quota Checking
+
+Before writing files, quota is checked:
+
+```go
+func (fs *Filesystem) HasSpaceFor(size int64) error {
+    if fs.unixFS.Limit() <= 0 {
+        // Unlimited quota
+        return nil
+    }
+    
+    current := fs.unixFS.Usage()
+    limit := fs.unixFS.Limit()
+    
+    if current + size > limit {
+        return &Error{
+            code: ErrCodeDiskSpace,
+        }
+    }
+    
+    return nil
+}
+```
+
+### Usage Tracking
+
+Usage is updated atomically after operations:
+
+```go
+// From server/filesystem/filesystem.go:131
+fs.unixFS.Add(n - currentSize)
+```
+
+The `Add` method uses atomic operations:
+
+```go
+func (q *Quota) Add(delta int64) {
+    q.usage.Add(delta)
+}
+```
+
+### Usage Recalculation
+
+Periodic full scans ensure accuracy:
+
+```go
+func (fs *Filesystem) HasSpaceAvailable(triggerLookup bool) bool {
+    // Check if we should trigger a lookup
+    if triggerLookup {
+        // Only one lookup at a time
+        if fs.lookupInProgress.CompareAndSwap(false, true) {
+            defer fs.lookupInProgress.Store(false)
+            
+            // Calculate actual disk usage
+            size, err := fs.DirectorySize("/")
+            if err != nil {
+                return true  // Assume space available on error
+            }
+            
+            // Update tracked usage
+            fs.unixFS.SetUsage(size)
+            fs.lastLookupTime.Store(time.Now())
+        }
+    }
+    
+    // Check quota
+    return fs.unixFS.Usage() < fs.unixFS.Limit()
+}
+```
+
+**Recalculation Triggers:**
+- Server start (if data directory exists)
+- Before container start
+- Manual trigger via API
+
+## SFTP Access
+
+Wings includes a built-in SFTP server that provides secure file access.
+
+### SFTP Authentication
+
+Authentication is validated against the Panel:
+
+```go
+type SftpAuthRequest struct {
+    User          string `json:"username"`
+    Pass          string `json:"password"`
+    IP            string `json:"ip"`
+    SessionID     []byte `json:"session_id"`
+}
+
+type SftpAuthResponse struct {
+    Server      string   `json:"server"`
+    Permissions []string `json:"permissions"`
+}
+```
+
+**Authentication Flow:**
+1. User connects to SFTP server
+2. Wings receives credentials
+3. Wings sends `ValidateSftpCredentials` request to Panel
+4. Panel validates and returns server UUID + permissions
+5. Wings creates SFTP session scoped to that server's filesystem
+
+### SFTP Configuration
+
+```yaml
+sftp:
+  bind_address: 0.0.0.0
+  bind_port: 2022
+  read_only: false
+```
+
+### File Access Scope
+
+SFTP sessions are jailed to the server's directory:
+
+```
+User logs in as: admin.{server-uuid}
+Root directory: /var/lib/pterodactyl/volumes/{server-uuid}/
+User sees: /
+Actual path: /var/lib/pterodactyl/volumes/{server-uuid}/
+```
+
+Users cannot access files outside their server's directory.
+
+### Read-Only Mode
+
+When `read_only: true`, all write operations are blocked:
+
+```go
+if config.Get().Sftp.ReadOnly {
+    return errors.New("SFTP server is in read-only mode")
+}
+```
+
+## Safety Features
+
+### Path Traversal Prevention
+
+The UnixFS implementation prevents path traversal attacks:
+
+```go
+func (fs *UnixFS) SafePath(path string) (dirfd int, name string, closeFd func(), err error) {
+    // Validate path doesn't escape
+    // Return directory fd + safe name
+    // Uses openat2 with RESOLVE_BENEATH when available
+}
+```
+
+This ensures operations stay within the server's directory.
+
+### Symlink Protection
+
+The filesystem walker doesn't follow symlinks:
+
+```go
+// From server/filesystem/filesystem.go:247
+if err := fs.unixFS.WalkDirat(dirfd, name, func(...) error {
+    // Walk implementation doesn't traverse symlinks
+})
+```
+
+This prevents:
+- Symlink timing attacks
+- Accessing files outside the server directory
+- Quota bypass via symlinks
+
+### Denylist Enforcement
+
+Egg configurations can define files that cannot be modified:
+
+```go
+fs.denylist = ignore.CompileIgnoreLines(denylist...)
+```
+
+Operations check against the denylist before proceeding.
+
+### Read-Only Root Filesystem
+
+Docker containers have read-only root filesystems (`environment/docker/container.go:253`):
+
+```go
+ReadonlyRootfs: true,
+```
+
+Only the mounted server directory and `/tmp` are writable.
+
+## File Operations via API
+
+The HTTP API exposes file operations:
+
+**Endpoints (from `router/router.go:88-104`):**
+
+```go
+files.GET("/contents", getServerFileContents)
+files.GET("/list-directory", getServerListDirectory)
+files.PUT("/rename", putServerRenameFiles)
+files.POST("/copy", postServerCopyFile)
+files.POST("/write", postServerWriteFile)
+files.POST("/create-directory", postServerCreateDirectory)
+files.POST("/delete", postServerDeleteFiles)
+files.POST("/compress", postServerCompressFiles)
+files.POST("/decompress", postServerDecompressFiles)
+files.POST("/chmod", postServerChmodFile)
+```
+
+### Compression Operations
+
+Wings supports creating and extracting archives:
+
+- **Supported formats:** `.tar.gz`, `.tar`, `.zip`
+- **Compression:** Creates archives from files/directories
+- **Decompression:** Extracts archives to specified location
+
+### Remote Downloads
+
+When enabled, servers can download files from remote URLs:
+
+```go
+files.GET("/pull", middleware.RemoteDownloadEnabled(), getServerPullingFiles)
+files.POST("/pull", middleware.RemoteDownloadEnabled(), postServerPullRemoteFile)
+files.DELETE("/pull/:download", middleware.RemoteDownloadEnabled(), deleteServerPullRemoteFile)
+```
+
+This is disabled by default for security (`config.Api.DisableRemoteDownload`).
+
+## Performance Considerations
+
+### Disk Usage Calculation
+
+Full disk scans are expensive. Wings optimizes by:
+
+1. **Tracking usage in-memory** - Atomic updates on operations
+2. **Periodic recalculation** - Only when needed
+3. **Single concurrent scan** - `lookupInProgress` prevents multiple scans
+
+### Efficient Walking
+
+The directory walker is optimized:
+
+```go
+// From server/filesystem/filesystem.go:247
+fs.unixFS.WalkDirat(dirfd, name, func(dirfd int, name, _ string, info ufs.DirEntry, err error) error {
+    // Direct syscalls via dirfd
+    // No symlink traversal
+    // Reused internal buffer
+})
+```
+
+This is significantly faster than traditional filepath.Walk.
+
+### Mimetype Detection
+
+Mimetypes are detected from file content, not extensions:
+
+```go
+m, err = mimetype.DetectReader(f)
+```
+
+This provides accurate types but requires reading file headers.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Architecture" icon="diagram-project" href="/concepts/architecture">
+    Understand the overall system architecture
+  </Card>
+  <Card title="Server Lifecycle" icon="arrows-rotate" href="/concepts/server-lifecycle">
+    Learn about server states and transitions
+  </Card>
+  <Card title="Docker Integration" icon="docker" href="/concepts/docker-integration">
+    Understand how Wings uses Docker
+  </Card>
+</CardGroup>

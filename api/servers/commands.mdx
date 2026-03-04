@@ -1,0 +1,85 @@
+---
+title: Send Commands
+api: POST /api/servers/:server/commands
+---
+
+Sends one or more commands to a running server instance.
+
+## Authentication
+
+Requires the Wings authentication token in the `Authorization` header:
+
+```
+Authorization: Bearer <token>
+```
+
+## Path Parameters
+
+<ParamField path="server" type="string" required>
+  The UUID of the server
+</ParamField>
+
+## Request Body
+
+<ParamField body="commands" type="array" required>
+  Array of command strings to send to the server. Each command is sent sequentially.
+</ParamField>
+
+## Response
+
+Returns `204 No Content` when commands have been sent successfully.
+
+## Error Responses
+
+<ResponseField name="404 Not Found">
+  The requested server does not exist on this Wings instance.
+</ResponseField>
+
+<ResponseField name="502 Bad Gateway">
+  Cannot send commands to a stopped server instance.
+</ResponseField>
+
+<ResponseField name="500 Internal Server Error">
+  An error occurred while checking if the server is running.
+</ResponseField>
+
+## Behavior
+
+- Checks if the server is running before sending commands
+- If the server is not running, returns a 502 error
+- Commands are sent sequentially in the order provided
+- If a command fails to send, an error is logged but subsequent commands are still attempted
+- Command failures do not cause the API request to fail
+
+## Example Request
+
+```bash
+curl -X POST https://wings.example.com/api/servers/8d3f9a2e-5c7b-4f1e-9d2a-6e8f1c3b5a7d/commands \
+  -H "Authorization: Bearer your-wings-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "commands": [
+      "say Server maintenance in 5 minutes",
+      "save-all",
+      "whitelist add PlayerName"
+    ]
+  }'
+```
+
+## Example Response
+
+```
+HTTP/1.1 204 No Content
+```
+
+## Notes
+
+- Commands are executed in the server's console/stdin
+- The server must be in a running state (not offline, starting, or stopping)
+- Individual command failures are logged but don't fail the entire request
+- There is no response body indicating which commands succeeded or failed
+- Commands are sent to the environment (Docker container) via stdin
+
+## Source Reference
+
+Implemented in `router/router_server.go:108`

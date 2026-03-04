@@ -1,0 +1,571 @@
+---
+title: Panel Configuration
+description: Configure Wings in the Pterodactyl Panel and set up node connectivity
+---
+
+After installing and configuring Wings, you need to create and configure the node in your Pterodactyl Panel. This guide covers the complete process of setting up Wings in the Panel.
+
+## Prerequisites
+
+Before configuring Wings in the Panel:
+
+<Steps>
+  <Step title="Panel Installed">
+    Ensure Pterodactyl Panel is installed and running
+  </Step>
+  
+  <Step title="Wings Installed">
+    Wings must be installed on the target server
+  </Step>
+  
+  <Step title="Admin Access">
+    You need administrator access to the Panel
+  </Step>
+  
+  <Step title="Network Connectivity">
+    Panel must be able to reach Wings on port 8080 (or configured port)
+  </Step>
+</Steps>
+
+## Creating a Node
+
+A node represents a Wings instance in the Panel.
+
+### Step 1: Access Admin Panel
+
+1. Log in to your Pterodactyl Panel
+2. Navigate to the **Admin Control Panel**
+3. Go to **Nodes** in the sidebar
+4. Click **Create New**
+
+### Step 2: Basic Configuration
+
+Fill in the basic node information:
+
+<ParamField path="Name" type="string" required>
+  Descriptive name for the node (e.g., "US-East-1", "EU-Node-01")
+</ParamField>
+
+<ParamField path="Description" type="string">
+  Optional description for internal use
+</ParamField>
+
+<ParamField path="Location" type="select" required>
+  Select or create a location for this node
+</ParamField>
+
+<ParamField path="FQDN" type="string" required>
+  Fully qualified domain name or IP address of the Wings server
+  
+  Examples:
+  - `node1.example.com`
+  - `192.168.1.100`
+  - `wings.pterodactyl.example.com`
+</ParamField>
+
+<Warning>
+The FQDN must be accessible from both the Panel and end users. Use a domain name for production deployments.
+</Warning>
+
+<ParamField path="Communicate Over SSL" type="boolean">
+  Enable if Wings is configured with SSL/TLS
+</ParamField>
+
+<ParamField path="Behind Proxy" type="boolean">
+  Enable if Wings is behind a reverse proxy
+</ParamField>
+
+### Step 3: Configuration Settings
+
+Configure resource limits and paths:
+
+#### System Settings
+
+<ParamField path="Total Memory" type="integer" required>
+  Total RAM allocated to this node in MB
+  
+  <Info>
+  This should be less than total system memory to account for OS overhead
+  </Info>
+</ParamField>
+
+<ParamField path="Memory Over-Allocation" type="integer" default="0">
+  Percentage of additional memory to allow allocation
+  
+  Example: 20% allows allocating 120% of total memory
+</ParamField>
+
+<ParamField path="Total Disk Space" type="integer" required>
+  Total disk space allocated in MB
+</ParamField>
+
+<ParamField path="Disk Over-Allocation" type="integer" default="0">
+  Percentage of additional disk to allow allocation
+</ParamField>
+
+#### Daemon Configuration
+
+<ParamField path="Daemon Port" type="integer" default="8080">
+  Wings API port (must match `api.port` in Wings config)
+</ParamField>
+
+<ParamField path="Daemon SFTP Port" type="integer" default="2022">
+  Wings SFTP port (must match `system.sftp.bind_port` in Wings config)
+</ParamField>
+
+### Step 4: Save Node
+
+Click **Create Node** to save the configuration.
+
+## Obtaining Configuration
+
+After creating the node, you need to configure Wings with the Panel.
+
+### Method 1: Auto-Configuration (Recommended)
+
+Use the Wings auto-configure command:
+
+<Steps>
+  <Step title="Generate API Token">
+    1. In the Panel, go to **Account Settings** → **API Credentials**
+    2. Click **Create New**
+    3. Description: "Wings Configuration"
+    4. Select permissions:
+       - ✓ `Nodes` → `Read`
+       - ✓ `Nodes` → `Create`
+    5. Copy the generated API token
+  </Step>
+  
+  <Step title="Run Configure Command">
+    On the Wings server, run:
+    
+    ```bash
+    sudo wings configure --panel-url https://panel.example.com \
+      --token YOUR_API_TOKEN \
+      --node NODE_ID
+    ```
+    
+    <Info>
+    The Node ID is shown in the Panel's node list
+    </Info>
+  </Step>
+  
+  <Step title="Verify Configuration">
+    Check that the config was created:
+    
+    ```bash
+    sudo cat /etc/pterodactyl/config.yml
+    ```
+  </Step>
+</Steps>
+
+### Method 2: Manual Configuration
+
+Alternatively, copy configuration from the Panel:
+
+<Steps>
+  <Step title="View Configuration">
+    1. In the Panel, open your node
+    2. Go to the **Configuration** tab
+    3. Copy the YAML configuration shown
+  </Step>
+  
+  <Step title="Create Config File">
+    On the Wings server:
+    
+    ```bash
+    sudo nano /etc/pterodactyl/config.yml
+    ```
+    
+    Paste the configuration from the Panel
+  </Step>
+  
+  <Step title="Set Permissions">
+    ```bash
+    sudo chmod 600 /etc/pterodactyl/config.yml
+    sudo chown root:root /etc/pterodactyl/config.yml
+    ```
+  </Step>
+</Steps>
+
+## Setting Up Allocations
+
+Allocations are IP:Port combinations assigned to servers.
+
+### Creating Allocations
+
+<Steps>
+  <Step title="Navigate to Node">
+    In the Panel, open your node and go to the **Allocation** tab
+  </Step>
+  
+  <Step title="Add Allocation">
+    Click **Create Allocation**
+  </Step>
+  
+  <Step title="Configure Allocation">
+    <ParamField path="IP Address" type="string" required>
+      Server's IP address (e.g., `192.168.1.100` or `0.0.0.0` for all interfaces)
+    </ParamField>
+    
+    <ParamField path="IP Alias" type="string">
+      Friendly name for the IP (optional)
+    </ParamField>
+    
+    <ParamField path="Ports" type="string" required>
+      Port or port range to create
+      
+      Examples:
+      - Single port: `25565`
+      - Port range: `25565-25665`
+      - Multiple ports: `25565,25566,25567`
+    </ParamField>
+  </Step>
+  
+  <Step title="Save Allocation">
+    Click **Submit** to create the allocation(s)
+  </Step>
+</Steps>
+
+### Bulk Allocation Creation
+
+For large deployments, create multiple allocations at once:
+
+```
+IP Address: 192.168.1.100
+Ports: 25565-26565
+```
+
+This creates 1,001 allocations (25565 through 26565).
+
+<Warning>
+Ensure your firewall allows these ports! See [Network Requirements](/installation/requirements#network-requirements).
+</Warning>
+
+## Starting Wings
+
+With configuration complete, start Wings:
+
+### First-Time Start
+
+```bash
+# Start Wings manually to check for errors
+sudo wings --debug
+```
+
+Watch the output for any errors. You should see:
+
+```
+[INFO] configured wings with system timezone: UTC
+[INFO] configured system user successfully
+[INFO] configuring internal webserver
+[INFO] webserver is now listening
+```
+
+### Enable Systemd Service
+
+Once verified, enable the systemd service:
+
+```bash
+# Stop the manual instance (Ctrl+C)
+
+# Enable and start the service
+sudo systemctl enable --now wings
+
+# Check status
+sudo systemctl status wings
+```
+
+## Verifying Connectivity
+
+Ensure the Panel can communicate with Wings:
+
+### Check Node Status
+
+In the Panel:
+
+1. Go to **Admin** → **Nodes**
+2. Your node should show a **green heart** icon indicating it's online
+3. Click the node to view details
+
+### Test API Connection
+
+From the Panel server, test the Wings API:
+
+```bash
+curl -k https://node.example.com:8080/api/system
+```
+
+You should receive a JSON response with system information.
+
+### Check Wings Logs
+
+Monitor Wings logs for connection attempts:
+
+```bash
+# View real-time logs
+sudo journalctl -u wings -f
+
+# View recent logs
+sudo journalctl -u wings -n 100
+
+# View Wings log file
+sudo tail -f /var/log/pterodactyl/wings.log
+```
+
+## Authentication Tokens
+
+Wings uses token-based authentication with the Panel.
+
+### Token Configuration
+
+Tokens are configured in two places:
+
+1. **Panel**: Node configuration stores the token ID and token
+2. **Wings**: Configuration file references these tokens (see config/config.go:324)
+
+```yaml /etc/pterodactyl/config.yml
+token_id: 'abc123def456'
+token: 'very-long-secure-token-string'
+```
+
+### Rotating Tokens
+
+To change authentication tokens:
+
+<Steps>
+  <Step title="Regenerate in Panel">
+    1. In the Panel, go to your node's **Configuration** tab
+    2. Click **Generate Token**
+    3. Copy the new configuration
+  </Step>
+  
+  <Step title="Update Wings Config">
+    Update `/etc/pterodactyl/config.yml` with new tokens
+  </Step>
+  
+  <Step title="Restart Wings">
+    ```bash
+    sudo systemctl restart wings
+    ```
+  </Step>
+</Steps>
+
+### Secure Token Storage
+
+For production environments, use systemd credentials:
+
+```ini /etc/systemd/system/wings.service
+[Service]
+LoadCredential=token_id:/etc/pterodactyl/credentials/token_id
+LoadCredential=token:/etc/pterodactyl/credentials/token
+```
+
+```yaml /etc/pterodactyl/config.yml
+token_id: 'file://${CREDENTIALS_DIRECTORY}/token_id'
+token: 'file://${CREDENTIALS_DIRECTORY}/token'
+```
+
+<Info>
+See config/config.go:844 for credential expansion implementation.
+</Info>
+
+## SSL/TLS Configuration
+
+Secure communication between Panel and Wings:
+
+### Using Let's Encrypt (Auto-TLS)
+
+Wings includes built-in Let's Encrypt support:
+
+```bash
+sudo wings --auto-tls --tls-hostname node.example.com
+```
+
+Update systemd service:
+
+```ini /etc/systemd/system/wings.service
+[Service]
+ExecStart=/usr/local/bin/wings --auto-tls --tls-hostname node.example.com
+```
+
+<Note>
+Auto-TLS requires port 80 to be accessible for ACME challenges (see cmd/root.go:353).
+</Note>
+
+### Using Custom Certificates
+
+Configure SSL in Wings config:
+
+```yaml /etc/pterodactyl/config.yml
+api:
+  ssl:
+    enabled: true
+    cert: /etc/letsencrypt/live/node.example.com/fullchain.pem
+    key: /etc/letsencrypt/live/node.example.com/privkey.pem
+```
+
+Enable SSL in Panel node settings:
+
+1. Edit node in Panel
+2. Enable **Communicate Over SSL**
+3. Update FQDN to use `https://` if needed
+
+## Advanced Configuration
+
+### Reverse Proxy Setup
+
+If Wings is behind a reverse proxy (Nginx, Apache, Cloudflare):
+
+1. **Panel**: Enable **Behind Proxy** in node settings
+2. **Wings**: Configure trusted proxies
+
+```yaml /etc/pterodactyl/config.yml
+api:
+  trusted_proxies:
+    - 127.0.0.1
+    - 10.0.0.0/8
+allow_cors_private_network: false
+```
+
+### Multiple Nodes
+
+For multi-node setups:
+
+<Steps>
+  <Step title="Create Each Node">
+    Repeat the node creation process for each Wings server
+  </Step>
+  
+  <Step title="Configure Unique Allocations">
+    Each node should have its own IP allocations
+  </Step>
+  
+  <Step title="Load Balancing">
+    The Panel automatically distributes servers across nodes based on available resources
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Node Shows Offline">
+    Check Wings status:
+    
+    ```bash
+    sudo systemctl status wings
+    sudo journalctl -u wings -n 50
+    ```
+    
+    Verify Panel can reach Wings:
+    
+    ```bash
+    # From Panel server
+    curl https://node.example.com:8080/api/system
+    ```
+  </Accordion>
+  
+  <Accordion title="Authentication Failures">
+    Verify tokens match:
+    
+    ```bash
+    # Check Wings config
+    sudo grep -E "token" /etc/pterodactyl/config.yml
+    ```
+    
+    Regenerate tokens in Panel and update Wings config.
+  </Accordion>
+  
+  <Accordion title="SSL/TLS Errors">
+    Check certificate validity:
+    
+    ```bash
+    # Test SSL connection
+    openssl s_client -connect node.example.com:8080
+    ```
+    
+    Ensure Panel has "Communicate Over SSL" enabled if Wings uses SSL.
+  </Accordion>
+  
+  <Accordion title="Port Already in Use">
+    Check for port conflicts:
+    
+    ```bash
+    sudo ss -tulpn | grep -E ':(8080|2022)'
+    ```
+    
+    Change ports in both Wings config and Panel node settings.
+  </Accordion>
+  
+  <Accordion title="Allocation Issues">
+    Verify allocations exist:
+    
+    ```bash
+    # Check Wings network
+    sudo docker network inspect pterodactyl_nw
+    ```
+    
+    Ensure firewall allows allocation ports.
+  </Accordion>
+</AccordionGroup>
+
+## Testing Server Creation
+
+Verify everything works by creating a test server:
+
+<Steps>
+  <Step title="Create Server">
+    1. In the Panel, go to **Servers** → **Create New**
+    2. Select your node
+    3. Choose an allocation
+    4. Configure and create the server
+  </Step>
+  
+  <Step title="Monitor Wings Logs">
+    ```bash
+    sudo journalctl -u wings -f
+    ```
+    
+    Watch for:
+    - Container creation
+    - Image pulling
+    - Server startup
+  </Step>
+  
+  <Step title="Verify Server Starts">
+    The server should start successfully in the Panel console
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Managing Servers" icon="server">
+    Learn how to manage servers through Wings
+  </Card>
+  
+  <Card title="Backups & Transfers" icon="hard-drive">
+    Configure backup and transfer systems
+  </Card>
+  
+  <Card title="Monitoring" icon="chart-line">
+    Set up monitoring and alerting
+  </Card>
+  
+  <Card title="Upgrading Wings" icon="arrow-up">
+    Keep Wings up to date
+  </Card>
+</CardGroup>
+
+## Configuration Summary
+
+<Note>
+Key configuration points:
+
+- **Panel node FQDN** must match Wings server address
+- **Ports in Panel** must match Wings configuration
+- **Tokens** must be identical in Panel and Wings config
+- **Allocations** must be created before assigning servers
+- **SSL settings** must match between Panel and Wings
+- **Firewall** must allow all configured ports
+</Note>

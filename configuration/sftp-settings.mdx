@@ -1,0 +1,318 @@
+---
+title: SFTP Settings
+description: Configure the built-in SFTP server for secure file access
+---
+
+## Overview
+
+Wings includes a built-in SFTP server that provides secure file access to game servers. The SFTP server authenticates users against the Panel and provides isolated access to each server's files.
+
+## Basic Configuration
+
+SFTP settings are configured under the `system` section:
+
+```yaml
+system:
+  sftp:
+    bind_address: 0.0.0.0
+    bind_port: 2022
+    read_only: false
+```
+
+## Configuration Options
+
+### Bind Address
+
+```yaml
+system:
+  sftp:
+    bind_address: 0.0.0.0
+```
+
+**Default:** `0.0.0.0`
+
+The IP address that the SFTP server listens on.
+
+**Common values:**
+- `0.0.0.0` - Listen on all interfaces (default)
+- `127.0.0.1` - Listen only on localhost
+- Specific IP - Listen on a specific network interface
+
+### Bind Port
+
+```yaml
+system:
+  sftp:
+    bind_port: 2022
+```
+
+**Default:** `2022`
+
+The port that the SFTP server listens on.
+
+<Note>
+Port 22 is the standard SFTP port but is typically used by the system SSH server. Wings uses port 2022 by default to avoid conflicts.
+</Note>
+
+### Read-Only Mode
+
+```yaml
+system:
+  sftp:
+    read_only: false
+```
+
+**Default:** `false`
+
+When enabled, no write actions are allowed on the SFTP server. Users can browse and download files but cannot upload, modify, or delete files.
+
+## Authentication
+
+The Wings SFTP server authenticates users through the Panel. Authentication credentials are validated in real-time.
+
+### Username Format
+
+SFTP usernames follow a specific format:
+
+```
+<panel-username>.<server-identifier>
+```
+
+**Example:** `john.a1b2c3d4`
+
+Where:
+- `john` is the Panel username
+- `a1b2c3d4` is the 8-character server identifier
+
+### Supported Authentication Methods
+
+1. **Password Authentication** - Standard password login
+2. **Public Key Authentication** - SSH key-based authentication
+
+## Security
+
+### Host Key
+
+Wings automatically generates an ED25519 private key for host verification on first startup. This key is stored in:
+
+```
+/etc/pterodactyl/.sftp/id_ed25519
+```
+
+The key is generated automatically if it doesn't exist.
+
+### Encryption
+
+The SFTP server uses strong cryptographic algorithms:
+
+**Key Exchange:**
+- `curve25519-sha256`
+- `curve25519-sha256@libssh.org`
+- `ecdh-sha2-nistp256`
+- `ecdh-sha2-nistp384`
+- `ecdh-sha2-nistp521`
+- `diffie-hellman-group14-sha256`
+
+**Ciphers:**
+- `aes128-gcm@openssh.com`
+- `chacha20-poly1305@openssh.com`
+- `aes128-ctr`
+- `aes192-ctr`
+- `aes256-ctr`
+
+**MACs:**
+- `hmac-sha2-256-etm@openssh.com`
+- `hmac-sha2-256`
+
+### Connection Limits
+
+**Max Authentication Tries:** 6
+
+After 6 failed authentication attempts, the connection is closed.
+
+## Firewall Configuration
+
+Ensure your firewall allows incoming connections on the SFTP port:
+
+**UFW:**
+```bash
+ufw allow 2022/tcp
+```
+
+**FirewallD:**
+```bash
+firewall-cmd --permanent --add-port=2022/tcp
+firewall-cmd --reload
+```
+
+**iptables:**
+```bash
+iptables -A INPUT -p tcp --dport 2022 -j ACCEPT
+```
+
+## Connecting to SFTP
+
+### Using FileZilla
+
+1. **Protocol:** SFTP
+2. **Host:** Your Wings server IP/hostname
+3. **Port:** 2022 (or your configured port)
+4. **Username:** `<panel-username>.<server-id>`
+5. **Password:** Your Panel password or SSH key
+
+### Using Command Line
+
+```bash
+sftp -P 2022 username.a1b2c3d4@your-server.com
+```
+
+With SSH key:
+```bash
+sftp -P 2022 -i ~/.ssh/id_rsa username.a1b2c3d4@your-server.com
+```
+
+### Using WinSCP
+
+1. **File protocol:** SFTP
+2. **Host name:** Your Wings server IP/hostname
+3. **Port number:** 2022
+4. **User name:** `<panel-username>.<server-id>`
+5. **Password:** Your Panel password
+
+## Troubleshooting
+
+### Cannot Connect to SFTP
+
+1. **Check Wings is running:**
+   ```bash
+   systemctl status wings
+   ```
+
+2. **Verify SFTP is listening:**
+   ```bash
+   netstat -tlnp | grep 2022
+   ```
+
+3. **Check firewall rules:**
+   ```bash
+   ufw status
+   ```
+
+4. **Review Wings logs:**
+   ```bash
+   journalctl -u wings -n 100
+   ```
+
+### Authentication Failures
+
+1. **Verify username format** - Must be `username.serverid`
+2. **Check Panel credentials** - SFTP uses Panel authentication
+3. **Review Wings logs** for authentication errors
+4. **Verify user permissions** on the Panel
+
+### Permission Denied Errors
+
+1. **Check server directory permissions:**
+   ```bash
+   ls -la /var/lib/pterodactyl/volumes/
+   ```
+
+2. **Verify pterodactyl user ownership:**
+   ```bash
+   chown -R pterodactyl:pterodactyl /var/lib/pterodactyl/volumes/
+   ```
+
+## Advanced Configuration
+
+### Using a Different Port
+
+To use a custom port:
+
+```yaml
+system:
+  sftp:
+    bind_port: 2222
+```
+
+Remember to:
+1. Update firewall rules
+2. Update the SFTP port in the Panel node configuration
+3. Inform users of the new port
+
+### Binding to Specific Interface
+
+For servers with multiple network interfaces:
+
+```yaml
+system:
+  sftp:
+    bind_address: 192.168.1.100
+```
+
+### Read-Only Access
+
+To provide read-only SFTP access (useful for troubleshooting):
+
+```yaml
+system:
+  sftp:
+    read_only: true
+```
+
+<Warning>
+Read-only mode affects all users. There's no per-user read-only configuration.
+</Warning>
+
+## Performance Considerations
+
+### Connection Limits
+
+The SFTP server can handle multiple concurrent connections. Performance depends on:
+
+- Available system resources (CPU, RAM)
+- Disk I/O performance
+- Number of files being accessed
+- Network bandwidth
+
+### Large File Operations
+
+For servers with many files:
+
+- Directory listings may be slow
+- Consider using compression for large transfers
+- Use `rsync` over SFTP for large directory synchronization
+
+## Example Configuration
+
+Complete SFTP configuration:
+
+```yaml
+system:
+  # ... other system settings ...
+  
+  sftp:
+    # Listen on all interfaces
+    bind_address: 0.0.0.0
+    
+    # Use standard SFTP port (change if needed)
+    bind_port: 2022
+    
+    # Allow read/write access
+    read_only: false
+```
+
+## Security Best Practices
+
+1. **Use SSH Keys** - Prefer public key authentication over passwords
+2. **Firewall Rules** - Restrict SFTP access to trusted IPs when possible
+3. **Regular Updates** - Keep Wings updated for latest security patches
+4. **Monitor Access** - Review logs for suspicious authentication attempts
+5. **Strong Passwords** - Enforce strong password policies on the Panel
+
+## Related Configuration
+
+SFTP server behavior is also affected by:
+
+- **System data directory** - Where server files are stored
+- **Pterodactyl user** - File ownership and permissions
+- **Panel node configuration** - SFTP port must match Panel settings

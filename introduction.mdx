@@ -1,0 +1,271 @@
+---
+title: Introduction to Wings
+description: Learn about Pterodactyl Wings, the server control plane for game server management
+---
+
+## What is Wings?
+
+Wings is Pterodactyl's server control plane, built for the rapidly changing gaming industry and designed to be highly performant and secure. It provides an HTTP API that allows you to interface directly with running server instances, fetch server logs, generate backups, and control all aspects of the server lifecycle.
+
+<Note>
+  Wings works in conjunction with the Pterodactyl Panel to provide a complete game server management solution. The Panel provides the web interface while Wings handles the actual server process management.
+</Note>
+
+## Key Features
+
+Wings provides a comprehensive set of features for managing game servers:
+
+### Docker-Based Container Management
+
+Wings leverages Docker to provide isolated, secure environments for each game server. Each server runs in its own container with:
+
+- **Resource Limits**: Memory and CPU limits configurable per server
+- **Network Isolation**: Custom network configuration with configurable DNS and networking
+- **Process Control**: Full lifecycle management (start, stop, restart, kill)
+- **Environment Variables**: Dynamic environment configuration passed to containers
+
+```go config/config.go
+// Container resource limits are enforced at the Docker level
+ContainerPidLimit int64 `default:"512"`
+TmpfsSize uint `default:"100"` // Size for /tmp in MB
+```
+
+### Built-in SFTP Server
+
+Wings ships with a built-in SFTP server that:
+
+- Allows users to access server files without SSH access to the host
+- Authenticates using the same credentials as the Panel
+- Eliminates the need for Pterodactyl-specific dependencies on the host system
+- Provides secure file transfer capabilities
+
+<CodeGroup>
+```yaml SFTP Configuration
+system:
+  sftp:
+    bind_address: 0.0.0.0
+    bind_port: 2022
+    read_only: false
+```
+
+```go cmd/root.go
+// SFTP server starts automatically with Wings
+go func() {
+    if err := sftp.New(manager).Run(); err != nil {
+        log.WithError(err).Fatal("failed to initialize the sftp server")
+        return
+    }
+}()
+```
+</CodeGroup>
+
+### Real-time WebSocket Communication
+
+Wings provides WebSocket endpoints for real-time server interaction:
+
+- **Console Output**: Stream server console logs in real-time
+- **Resource Statistics**: CPU, memory, disk, and network usage
+- **Power Actions**: Execute commands and control server state
+- **File Operations**: Real-time file system operations
+
+### HTTP API for Server Control
+
+The Wings HTTP API exposes endpoints for comprehensive server management at `cmd/root.go:48`:
+
+<CodeGroup>
+```go Power Management
+// Available power actions
+PowerActionStart   = "start"
+PowerActionStop    = "stop" 
+PowerActionRestart = "restart"
+PowerActionKill    = "kill"
+```
+
+```go Server Lifecycle
+// Wings manages complete server lifecycle
+- Installation and reinstallation
+- Configuration synchronization
+- State persistence and recovery
+- Crash detection and auto-restart
+```
+</CodeGroup>
+
+### Advanced File Management
+
+Wings provides a custom filesystem implementation (`server/filesystem/filesystem.go`) with:
+
+- **Path Validation**: Prevents directory traversal attacks
+- **Disk Quotas**: Enforces per-server storage limits
+- **Compression**: Create and extract archives (tar.gz, zip)
+- **Permissions**: Automatic file ownership management
+- **Bulk Operations**: Copy, move, and delete multiple files
+
+### Backup & Transfer System
+
+Wings includes built-in backup functionality:
+
+- **Local Backups**: Store backups on the Wings server
+- **S3-Compatible Storage**: Upload backups to remote storage
+- **Server Transfers**: Migrate servers between Wings nodes
+- **Compression Control**: Configurable compression levels
+- **Write Limits**: Throttle I/O to prevent system impact
+
+<CodeGroup>
+```yaml Backup Configuration
+system:
+  backups:
+    write_limit: 0  # MB/s (0 = unlimited)
+    compression_level: best_speed  # or best_compression
+```
+
+```go server/backup/backup.go
+// Backup supports multiple storage drivers
+- Local filesystem storage
+- S3-compatible object storage
+- Configurable retention policies
+```
+</CodeGroup>
+
+### Crash Detection & Recovery
+
+Wings automatically monitors server processes at `server/crash.go`:
+
+- **Automatic Detection**: Identifies unexpected server crashes
+- **Smart Recovery**: Attempts automatic restart with configurable thresholds
+- **Clean Exit Detection**: Optionally treats clean exits as crashes
+- **Boot Loop Prevention**: Prevents infinite restart cycles
+
+```yaml config.yml
+system:
+  crash_detection:
+    enabled: true
+    detect_clean_exit_as_crash: true
+    timeout: 60  # seconds between crashes
+```
+
+### Resource Monitoring
+
+Wings continuously tracks server resource usage (`environment/stats.go`):
+
+- **CPU Usage**: Real-time CPU percentage
+- **Memory**: Current memory consumption and limits
+- **Disk Space**: Storage usage with quota enforcement
+- **Network I/O**: Inbound and outbound traffic statistics
+
+## Architecture Overview
+
+Wings is built with Go and follows a modular architecture:
+
+```
+Wings Architecture
+├── HTTP API Server (port 8080)
+│   ├── RESTful endpoints for Panel communication
+│   ├── WebSocket server for real-time connections
+│   └── File upload/download handlers
+│
+├── SFTP Server (port 2022)
+│   ├── Authentication via Panel API
+│   └── Isolated file system access per server
+│
+├── Server Manager
+│   ├── Server lifecycle management
+│   ├── Configuration synchronization
+│   └── State persistence
+│
+├── Docker Environment
+│   ├── Container creation and management
+│   ├── Resource limit enforcement
+│   └── Network configuration
+│
+└── Background Workers
+    ├── Resource usage collection
+    ├── Activity log aggregation
+    └── Backup processing
+```
+
+## How Wings Fits into Pterodactyl
+
+Pterodactyl uses a distributed architecture:
+
+<Steps>
+  <Step title="Panel (Web Interface)">
+    The Pterodactyl Panel provides the web-based management interface where users and administrators interact with servers. It handles:
+    - User authentication and permissions
+    - Server allocation and configuration
+    - Billing and resource management
+    - Egg (game configuration) management
+  </Step>
+  
+  <Step title="Wings (Control Plane)">
+    Wings runs on each physical or virtual server (node) and handles:
+    - Actual server process execution
+    - Real-time resource monitoring
+    - File system operations
+    - Console access and command execution
+  </Step>
+  
+  <Step title="Communication Flow">
+    The Panel and Wings communicate via secure HTTP API:
+    ```
+    User → Panel (HTTPS) → Wings (API) → Docker → Game Server
+    ```
+    Wings reports server state and statistics back to the Panel for display to users.
+  </Step>
+</Steps>
+
+<Warning>
+  Wings requires Docker to be installed and running on the host system. All game servers run as Docker containers managed by Wings.
+</Warning>
+
+## System Requirements
+
+To run Wings effectively, your system should meet these requirements:
+
+- **Operating System**: Linux (Ubuntu 20.04+, Debian 11+, CentOS 8+, or similar)
+- **Docker**: Version 20.10 or newer
+- **Architecture**: x86_64 (amd64) or ARM64
+- **Memory**: Minimum 1GB available (plus memory for game servers)
+- **Disk Space**: Depends on number and size of game servers
+- **Network**: Open ports 8080 (API) and 2022 (SFTP), plus game server ports
+
+## Security Considerations
+
+Wings implements multiple security layers:
+
+- **Authentication**: All API requests require valid Panel-issued tokens at `config/config.go:318`
+- **Path Validation**: Filesystem operations prevent directory traversal
+- **Container Isolation**: Each server runs in an isolated Docker container
+- **TLS Support**: Optional HTTPS with automatic Let's Encrypt certificates
+- **Resource Limits**: Per-server CPU, memory, and disk quotas
+
+```go cmd/root.go:84
+// Wings supports automatic TLS via Let's Encrypt
+rootCommand.Flags().Bool("auto-tls", false, 
+    "generate and manage SSL certificates using Let's Encrypt")
+rootCommand.Flags().String("tls-hostname", "", 
+    "FQDN for the generated SSL certificate")
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Get Wings up and running in minutes
+  </Card>
+  <Card title="Configuration" icon="sliders" href="/configuration/config-file">
+    Learn about Wings configuration options
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/overview">
+    Explore the Wings HTTP API
+  </Card>
+  <Card title="Core Concepts" icon="book" href="/concepts/architecture">
+    Understand Wings architecture
+  </Card>
+</CardGroup>
+
+## Additional Resources
+
+- [Official Pterodactyl Documentation](https://pterodactyl.io)
+- [GitHub Repository](https://github.com/pterodactyl/wings)
+- [Discord Community](https://discord.gg/pterodactyl)
+- [Panel Documentation](https://pterodactyl.io/panel/1.0/getting_started.html)

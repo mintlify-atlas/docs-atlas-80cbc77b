@@ -1,0 +1,79 @@
+---
+title: Delete Server
+api: DELETE /api/servers/:server
+---
+
+Deletes a server from the Wings instance, including its environment, files, and all associated resources.
+
+## Authentication
+
+Requires the Wings authentication token in the `Authorization` header:
+
+```
+Authorization: Bearer <token>
+```
+
+## Path Parameters
+
+<ParamField path="server" type="string" required>
+  The UUID of the server to delete
+</ParamField>
+
+## Response
+
+Returns `204 No Content` on successful deletion.
+
+## Error Responses
+
+<ResponseField name="404 Not Found">
+  The requested server does not exist on this Wings instance.
+</ResponseField>
+
+<ResponseField name="500 Internal Server Error">
+  An error occurred while deleting the server environment.
+</ResponseField>
+
+## Behavior
+
+This endpoint:
+1. Immediately suspends the server to prevent start attempts
+2. Publishes deletion event to all websocket clients
+3. Cancels all websocket connections
+4. Cleans up server resources and background tasks
+5. Cancels any pending remote file downloads
+6. Destroys the Docker container (forcibly if running)
+7. Removes server from the manager
+8. Deletes server files in background (asynchronous)
+
+## Notes
+
+- The server is immediately marked as suspended
+- All websocket connections are forcibly closed
+- If the server is transferring, a `TransferStatusEvent` is published with `completed` status
+- Docker container destruction is synchronous (blocks the request)
+- File deletion happens asynchronously to avoid blocking on large servers
+- File deletion errors are logged but don't fail the request
+
+## Example Request
+
+```bash
+curl -X DELETE https://wings.example.com/api/servers/8d3f9a2e-5c7b-4f1e-9d2a-6e8f1c3b5a7d \
+  -H "Authorization: Bearer your-wings-token" \
+  -H "Accept: application/json"
+```
+
+## Example Response
+
+```
+HTTP/1.1 204 No Content
+```
+
+## Websocket Events
+
+Clients connected via websocket will receive:
+- `deleted` event - Notifies clients the server is being deleted
+- `transfer status` event (if server is transferring) - Indicates transfer completion
+
+## Source Reference
+
+Implemented in `router/router_server.go:192`

@@ -1,0 +1,94 @@
+---
+title: Sync Server
+api: POST /api/servers/:server/sync
+---
+
+Manually triggers a synchronization of the server's configuration with the Panel. This updates the local server state to match the Panel's current configuration.
+
+## Authentication
+
+Requires the Wings authentication token in the `Authorization` header:
+
+```
+Authorization: Bearer <token>
+```
+
+## Path Parameters
+
+<ParamField path="server" type="string" required>
+  The UUID of the server
+</ParamField>
+
+## Response
+
+Returns `204 No Content` on successful synchronization.
+
+## Error Responses
+
+<ResponseField name="404 Not Found">
+  The requested server does not exist on this Wings instance or on the Panel.
+</ResponseField>
+
+<ResponseField name="500 Internal Server Error">
+  An error occurred while syncing with the Panel.
+</ResponseField>
+
+## Behavior
+
+This endpoint:
+1. Fetches the latest server configuration from the Panel
+2. Updates the local configuration with Panel data
+3. Updates disk space limits
+4. Syncs environment variables and resource limits
+5. If server is suspended, disconnects all websocket and SFTP clients
+
+### What Gets Synced
+
+- Server configuration (build settings, limits, allocations)
+- Process configuration (startup command, environment variables)
+- Container configuration (Docker image)
+- Suspension status
+- Resource limits (memory, CPU, disk, swap)
+- Environment variables
+- Crash detection settings
+
+### Automatic Disconnection
+
+If the server is found to be suspended during sync:
+- All open websocket connections are closed
+- All SFTP connections are terminated
+- JWTs remain valid but connections are refused
+
+## Example Request
+
+```bash
+curl -X POST https://wings.example.com/api/servers/8d3f9a2e-5c7b-4f1e-9d2a-6e8f1c3b5a7d/sync \
+  -H "Authorization: Bearer your-wings-token" \
+  -H "Accept: application/json"
+```
+
+## Example Response
+
+```
+HTTP/1.1 204 No Content
+```
+
+## Notes
+
+- Sync is automatically triggered before server starts
+- Manual sync can be used to update configuration without restarting
+- If the server no longer exists on the Panel, a 404 error is returned
+- Changes to environment variables take effect on next server start
+- Resource limit changes are applied to the environment immediately
+- Disk limit changes are applied to the filesystem immediately
+
+## Use Cases
+
+- Apply configuration changes made in the Panel without restarting
+- Update server after allocation changes
+- Refresh server state after Panel modifications
+- Synchronize after updating environment variables
+
+## Source Reference
+
+Implemented in `router/router_server.go:142` and `server/server.go:186`

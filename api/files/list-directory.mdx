@@ -1,0 +1,155 @@
+---
+title: "List Directory Contents"
+description: "Get a list of files and directories in a server directory"
+---
+
+## Endpoint
+
+```
+GET /api/servers/:server/files/list-directory
+```
+
+## Authentication
+
+Requires Bearer token authentication via the `Authorization` header.
+
+## Path Parameters
+
+<ParamField path="server" type="string" required>
+  The UUID of the server
+</ParamField>
+
+## Query Parameters
+
+<ParamField query="directory" type="string" default="/">
+  The directory path to list (relative to server root). Defaults to root directory if not specified.
+</ParamField>
+
+## Response
+
+Returns an array of file stat objects.
+
+<ResponseField name="name" type="string">
+  The name of the file or directory
+</ResponseField>
+
+<ResponseField name="mode" type="string">
+  Unix file mode as a string
+</ResponseField>
+
+<ResponseField name="mode_bits" type="string">
+  Unix file mode in octal notation
+</ResponseField>
+
+<ResponseField name="size" type="integer">
+  Size of the file in bytes
+</ResponseField>
+
+<ResponseField name="is_file" type="boolean">
+  Whether this entry is a file
+</ResponseField>
+
+<ResponseField name="is_symlink" type="boolean">
+  Whether this entry is a symbolic link
+</ResponseField>
+
+<ResponseField name="mimetype" type="string">
+  MIME type of the file (detected by file extension)
+</ResponseField>
+
+<ResponseField name="created_at" type="string">
+  ISO 8601 timestamp of file creation
+</ResponseField>
+
+<ResponseField name="modified_at" type="string">
+  ISO 8601 timestamp of last modification
+</ResponseField>
+
+## Example Request
+
+<CodeGroup>
+```bash cURL
+curl -X GET "https://wings.example.com/api/servers/d3aac109-f0fc-4674-b5bc-199bb50e6b88/files/list-directory?directory=/logs" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Accept: application/json"
+```
+
+```javascript JavaScript
+const response = await fetch(
+  'https://wings.example.com/api/servers/d3aac109-f0fc-4674-b5bc-199bb50e6b88/files/list-directory?directory=/logs',
+  {
+    headers: {
+      'Authorization': 'Bearer YOUR_TOKEN',
+      'Accept': 'application/json'
+    }
+  }
+);
+const files = await response.json();
+```
+
+```python Python
+import requests
+
+response = requests.get(
+    'https://wings.example.com/api/servers/d3aac109-f0fc-4674-b5bc-199bb50e6b88/files/list-directory',
+    params={'directory': '/logs'},
+    headers={'Authorization': 'Bearer YOUR_TOKEN'}
+)
+files = response.json()
+```
+</CodeGroup>
+
+## Example Response
+
+```json
+[
+  {
+    "name": "server.log",
+    "mode": "-rw-r--r--",
+    "mode_bits": "0644",
+    "size": 524288,
+    "is_file": true,
+    "is_symlink": false,
+    "mimetype": "text/plain",
+    "created_at": "2024-01-15T10:30:00Z",
+    "modified_at": "2024-01-15T14:25:00Z"
+  },
+  {
+    "name": "backups",
+    "mode": "drwxr-xr-x",
+    "mode_bits": "0755",
+    "size": 4096,
+    "is_file": false,
+    "is_symlink": false,
+    "mimetype": "inode/directory",
+    "created_at": "2024-01-10T08:00:00Z",
+    "modified_at": "2024-01-15T12:00:00Z"
+  }
+]
+```
+
+## Behavior
+
+- Files are sorted with **directories first**, then files alphabetically
+- Path traversal is prevented - attempts to access paths outside the server directory will fail
+- The directory path is relative to the server's root directory
+- Symlinks are resolved but marked with `is_symlink: true`
+- Hidden files (starting with `.`) are included in the listing
+
+## Error Responses
+
+<AccordionGroup>
+  <Accordion title="401 Unauthorized">
+    Missing or invalid Bearer token
+  </Accordion>
+  <Accordion title="404 Not Found">
+    Server does not exist or directory not found
+  </Accordion>
+  <Accordion title="500 Internal Server Error">
+    Failed to read directory contents
+  </Accordion>
+</AccordionGroup>
+
+## Source Reference
+
+Implementation: `router/router_server_files.go:78-86`

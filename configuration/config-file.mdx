@@ -1,0 +1,188 @@
+---
+title: Configuration File
+description: Learn about the Wings configuration file location, structure, and how to manage it
+---
+
+## Configuration File Location
+
+Wings uses a YAML configuration file to manage all settings. The default location for this file is:
+
+```
+/etc/pterodactyl/config.yml
+```
+
+You can override this location using the `--config` flag:
+
+```bash
+wings --config /path/to/custom/config.yml
+```
+
+## File Structure
+
+The configuration file is structured in YAML format with several main sections:
+
+```yaml
+app_name: Pterodactyl
+debug: false
+uuid: <node-uuid>
+token_id: <token-id>
+token: <authentication-token>
+
+api:
+  host: 0.0.0.0
+  port: 8080
+  ssl:
+    enabled: false
+    cert: /etc/letsencrypt/live/example.com/fullchain.pem
+    key: /etc/letsencrypt/live/example.com/privkey.pem
+  upload_limit: 100
+  trusted_proxies: []
+  disable_remote_download: false
+
+system:
+  root_directory: /var/lib/pterodactyl
+  log_directory: /var/log/pterodactyl
+  data: /var/lib/pterodactyl/volumes
+  archive_directory: /var/lib/pterodactyl/archives
+  backup_directory: /var/lib/pterodactyl/backups
+  tmp_directory: /tmp/pterodactyl
+  username: pterodactyl
+  timezone: UTC
+  # ... additional system settings
+
+docker:
+  network:
+    name: pterodactyl_nw
+    # ... docker network settings
+  # ... additional docker settings
+
+remote: https://panel.example.com
+remote_query:
+  timeout: 30
+  boot_servers_per_page: 50
+
+allowed_mounts: []
+allowed_origins: []
+```
+
+## Loading the Configuration
+
+Wings automatically loads the configuration file on startup. The configuration is read from disk and stored in memory for the duration of the Wings process.
+
+### Initial Configuration
+
+If Wings cannot find a configuration file at the default location (or specified location), it will exit with an error. You must have a valid configuration file before starting Wings.
+
+To generate a configuration file:
+
+1. Access your Pterodactyl Panel
+2. Navigate to the node you want to configure
+3. Copy the auto-generated configuration
+4. Save it to `/etc/pterodactyl/config.yml`
+
+### Environment Variable Expansion
+
+Wings supports environment variable expansion in configuration values:
+
+```yaml
+token: ${WINGS_TOKEN}
+token_id: ${WINGS_TOKEN_ID}
+```
+
+### File References
+
+You can reference external files for sensitive values using the `file://` prefix:
+
+```yaml
+token: file:///path/to/token/file
+token_id: file://${CREDENTIALS_DIRECTORY}/token_id
+```
+
+This is particularly useful with systemd's `LoadCredential` or `LoadCredentialEncrypted` options.
+
+## Reloading Configuration
+
+Wings does not support hot-reloading of configuration changes. To apply configuration changes:
+
+1. Edit the configuration file
+2. Restart Wings:
+   ```bash
+   systemctl restart wings
+   ```
+
+<Warning>
+Restarting Wings will interrupt all running game servers briefly as they are re-attached to the Wings process.
+</Warning>
+
+## Configuration Persistence
+
+Wings may write configuration changes to disk automatically in certain cases:
+
+- When the Panel sends configuration updates (unless `ignore_panel_config_updates` is set to `true`)
+- When system-detected values are updated (e.g., user UID/GID)
+
+The configuration file is written with `0600` permissions (read/write for owner only) for security.
+
+## Debug Mode
+
+You can enable debug mode in two ways:
+
+1. **Configuration file:**
+   ```yaml
+   debug: true
+   ```
+
+2. **Command-line flag:**
+   ```bash
+   wings --debug
+   ```
+
+<Note>
+When using the `--debug` flag, the debug setting will not be persisted to the configuration file on disk.
+</Note>
+
+## Configuration Sections
+
+The configuration file is divided into several major sections:
+
+- **`api`** - API server and web interface settings
+- **`system`** - System directories, user, and operational settings
+- **`docker`** - Docker container and network configuration
+- **`remote`** - Panel connection URL
+- **`remote_query`** - Settings for API requests to the Panel
+- **`throttles`** - Console output throttling configuration
+- **`allowed_mounts`** - Host paths allowed for server mounts
+- **`allowed_origins`** - Additional CORS origins
+
+Refer to the specific configuration pages for detailed information about each section.
+
+## Common Configuration Patterns
+
+### Ignoring Panel Updates
+
+If you want to manage configuration manually and prevent the Panel from updating it:
+
+```yaml
+ignore_panel_config_updates: true
+```
+
+### Trusted Proxies
+
+If Wings is behind a reverse proxy, configure trusted proxy IPs to correctly detect client IPs:
+
+```yaml
+api:
+  trusted_proxies:
+    - 127.0.0.1
+    - 10.0.0.1
+```
+
+### CORS Configuration
+
+For allowing additional origins beyond the Panel URL:
+
+```yaml
+allowed_origins:
+  - https://example.com
+  - https://panel.example.com
+```

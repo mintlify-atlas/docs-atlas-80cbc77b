@@ -1,0 +1,270 @@
+---
+title: Server Websocket
+api: GET /api/servers/:server/ws
+---
+
+Upgrades the connection to a websocket for real-time server console output, statistics, and command execution.
+
+## Authentication
+
+Requires a JWT token in the query string or as a bearer token. This endpoint uses different authentication than other API endpoints - it requires a signed JWT issued by the Panel, not the Wings authentication token.
+
+```
+wss://wings.example.com/api/servers/:server/ws?token=<jwt-token>
+```
+
+## Path Parameters
+
+<ParamField path="server" type="string" required>
+  The UUID of the server
+</ParamField>
+
+## Connection Limits
+
+- Maximum 30 concurrent websocket connections per server
+- Connections are tracked across all users
+- Exceeding the limit returns a 400 error
+
+## Rate Limiting
+
+Global rate limit: 10 messages per 200ms (50 messages/second)
+- When throttled, clients receive a `throttled` event with args `["global"]`
+- Individual message types have additional rate limits
+
+## Message Format
+
+All websocket messages use JSON format:
+
+```json
+{
+  "event": "event_name",
+  "args": ["arg1", "arg2"]
+}
+```
+
+## Client → Server Events
+
+Messages sent from client to server to control the server or request data.
+
+### send command
+Send a command to the server console.
+```json
+{
+  "event": "send command",
+  "args": ["say Hello World"]
+}
+```
+
+### send logs
+Request historical console logs.
+```json
+{
+  "event": "send logs",
+  "args": []
+}
+```
+
+### send stats
+Request current server statistics.
+```json
+{
+  "event": "send stats",
+  "args": []
+}
+```
+
+### set state
+Change server power state.
+```json
+{
+  "event": "set state",
+  "args": ["start"]  // start, stop, restart, kill
+}
+```
+
+## Server → Client Events
+
+Events sent from server to client with real-time updates.
+
+### console output
+Real-time console output from the server.
+```json
+{
+  "event": "console output",
+  "args": ["[10:30:15] [Server thread/INFO]: Player joined the game"]
+}
+```
+
+### status
+Server state changes.
+```json
+{
+  "event": "status",
+  "args": ["running"]  // offline, starting, running, stopping
+}
+```
+
+### stats
+Server resource utilization updates (sent periodically).
+```json
+{
+  "event": "stats",
+  "args": ["{\"memory_bytes\":536870912,\"cpu_absolute\":25.5,...}"]
+}
+```
+
+### token expiring
+Notifies client that JWT is about to expire.
+```json
+{
+  "event": "token expiring",
+  "args": []
+}
+```
+
+### token expired
+Notifies client that JWT has expired.
+```json
+{
+  "event": "token expired",
+  "args": []
+}
+```
+
+### daemon message
+System messages from Wings daemon.
+```json
+{
+  "event": "daemon message",
+  "args": ["Server is starting..."]
+}
+```
+
+### install output
+Installation progress output.
+```json
+{
+  "event": "install output",
+  "args": ["Downloading server files..."]
+}
+```
+
+### install started
+Installation process has begun.
+```json
+{
+  "event": "install started",
+  "args": []
+}
+```
+
+### install completed
+Installation process completed.
+```json
+{
+  "event": "install completed",
+  "args": []
+}
+```
+
+## Error Responses
+
+<ResponseField name="400 Bad Request">
+  Too many open websocket connections (limit: 30 per server).
+</ResponseField>
+
+<ResponseField name="404 Not Found">
+  The requested server does not exist on this Wings instance.
+</ResponseField>
+
+## Suspension Handling
+
+If the server is suspended:
+1. Websocket connection is established
+2. Immediately receives a close message with code 4409
+3. Close message: "server is suspended"
+4. Connection is terminated
+
+This is necessary because websocket clients cannot read HTTP response codes.
+
+## Connection Lifecycle
+
+1. Client connects with valid JWT
+2. Connection is established and tracked
+3. Client receives real-time events
+4. Connection closes on:
+   - Client disconnect
+   - Server deletion
+   - Server suspension
+   - Context cancellation
+   - JWT expiration
+
+## Example Connection (JavaScript)
+
+```javascript
+const ws = new WebSocket(
+  'wss://wings.example.com/api/servers/8d3f9a2e-5c7b-4f1e-9d2a-6e8f1c3b5a7d/ws?token=eyJhbGc...'
+);
+
+ws.onopen = () => {
+  console.log('Connected to server websocket');
+  
+  // Request logs
+  ws.send(JSON.stringify({
+    event: 'send logs',
+    args: []
+  }));
+};
+
+ws.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+  
+  switch(data.event) {
+    case 'console output':
+      console.log('Console:', data.args[0]);
+      break;
+    case 'status':
+      console.log('Status changed to:', data.args[0]);
+      break;
+    case 'stats':
+      const stats = JSON.parse(data.args[0]);
+      console.log('CPU:', stats.cpu_absolute, 'Memory:', stats.memory_bytes);
+      break;
+  }
+};
+
+ws.onclose = (event) => {
+  console.log('Disconnected:', event.code, event.reason);
+};
+
+// Send a command
+function sendCommand(command) {
+  ws.send(JSON.stringify({
+    event: 'send command',
+    args: [command]
+  }));
+}
+```
+
+## Close Codes
+
+Expected close codes:
+- `1000` - Normal closure
+- `1001` - Going away
+- `1006` - Abnormal closure (no close frame)
+- `1012` - Service restart
+- `4409` - Server suspended (custom code)
+
+## Notes
+
+- JWT authentication is separate from Wings bearer token authentication
+- Connection tracking is server-wide, not per-user
+- Messages larger than 32KB are dropped
+- Only text messages are accepted (binary messages are ignored)
+- Invalid JSON messages are silently discarded
+- Message size limit: 4KB compressed, 32KB uncompressed
+- Rate limiting is enforced globally and per-message-type
+
+## Source Reference
+
+Implemented in `router/router_server_ws.go:27`

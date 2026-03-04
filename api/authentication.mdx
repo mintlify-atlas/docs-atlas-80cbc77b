@@ -1,0 +1,551 @@
+---
+title: 'Authentication'
+description: 'Learn how to authenticate API requests to Pterodactyl Wings'
+---
+
+## Overview
+
+Pterodactyl Wings uses two authentication mechanisms:
+
+1. **Bearer Token Authentication** - For Panel-to-Wings API communication
+2. **JWT (JSON Web Tokens)** - For temporary access to specific resources
+
+<Warning>
+Wings is designed to receive requests from the Pterodactyl Panel backend only. Direct client access is not supported for Bearer token endpoints.
+</Warning>
+
+## Bearer Token Authentication
+
+### How It Works
+
+Most Wings API endpoints require a static Bearer token that matches the token configured in the Wings `config.yml` file. This token is shared between the Panel and Wings during initial setup.
+
+### Configuration
+
+The authentication token is stored in `/etc/pterodactyl/config.yml`:
+
+```yaml
+token_id: <token-id>
+token: <your-secret-token>
+```
+
+<Info>
+The `token_id` is a unique identifier for the node, while `token` is the actual authentication credential.
+</Info>
+
+### Making Authenticated Requests
+
+Include the Bearer token in the `Authorization` header:
+
+```bash
+curl -X GET https://wings.example.com/api/system \
+  -H "Authorization: Bearer <your-secret-token>" \
+  -H "Content-Type: application/json"
+```
+
+### Authorization Header Format
+
+<ParamField name="Authorization" type="string" required>
+  Must follow the format: `Bearer <token>`
+  
+  **Valid Format:**
+  ```
+  Authorization: Bearer ptla_1234567890abcdef
+  ```
+  
+  **Invalid Formats:**
+  ```
+  Authorization: ptla_1234567890abcdef          // Missing "Bearer" prefix
+  Authorization: Token ptla_1234567890abcdef     // Wrong prefix
+  Authorization: Bearer ptla_1234 567890         // Space in token
+  ```
+</ParamField>
+
+### Authentication Flow
+
+When a request is received, Wings:
+
+1. Extracts the `Authorization` header
+2. Splits the header on the first space character
+3. Verifies the prefix is exactly `Bearer`
+4. Compares the token using constant-time comparison to prevent timing attacks
+5. Allows or denies the request based on the match
+
+**Implementation Reference** (router/middleware/middleware.go:166-186):
+
+```go
+auth := strings.SplitN(c.GetHeader("Authorization"), " ", 2)
+if len(auth) != 2 || auth[0] != "Bearer" {
+    c.Header("WWW-Authenticate", "Bearer")
+    c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+        "error": "The required authorization heads were not present in the request.",
+    })
+    return
+}
+
+if subtle.ConstantTimeCompare([]byte(auth[1]), []byte(config.Get().Token.Token)) != 1 {
+    c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+        "error": "You are not authorized to access this endpoint.",
+    })
+    return
+}
+```
+
+### Protected Endpoints
+
+The following endpoints require Bearer token authentication:
+
+**System Management:**
+- `POST /api/update` - Update Wings configuration
+- `GET /api/system` - Get system information
+- `GET /api/servers` - List all servers
+- `POST /api/servers` - Create new server
+- `DELETE /api/transfers/:server` - Delete transfer
+- `POST /api/deauthorize-user` - Deauthorize user tokens
+
+**Server Management:**
+- All `/api/servers/:server/*` endpoints except WebSocket
+
+### Authentication Errors
+
+<ResponseField name="401 Unauthorized" type="error">
+  Missing or malformed Authorization header.
+  
+  ```json
+  {
+    "error": "The required authorization heads were not present in the request.",
+    "request_id": "550e8400-e29b-41d4-a716-446655440000"
+  }
+  ```
+  
+  **Response Headers:**
+  ```
+  WWW-Authenticate: Bearer
+  ```
+</ResponseField>
+
+<ResponseField name="403 Forbidden" type="error">
+  Valid Authorization header format but incorrect token.
+  
+  ```json
+  {
+    "error": "You are not authorized to access this endpoint.",
+    "request_id": "550e8400-e29b-41d4-a716-446655440000"
+  }
+  ```
+</ResponseField>
+
+## JWT Authentication
+
+### Overview
+
+JWT (JSON Web Tokens) provide temporary, signed access to specific Wings resources without requiring the static Bearer token. JWTs are used for:
+
+- WebSocket connections
+- File downloads
+- Backup downloads
+- File uploads
+- Server transfers
+
+### JWT Algorithm
+
+Wings uses **HMAC-SHA256** (HS256) for JWT signing and verification, with the secret key derived from the Wings authentication token.
+
+**Implementation Reference** (router/tokens/parser.go:20-29):
+
+```go
+func ParseToken(token []byte, data TokenData) error {
+    verifyOptions := jwt.ValidatePayload(
+        data.GetPayload(),
+        jwt.ExpirationTimeValidator(time.Now()),
+    )
+    
+    _, err := jwt.Verify(token, config.GetJwtAlgorithm(), &data, verifyOptions)
+    return err
+}
+```
+
+### WebSocket JWT
+
+WebSocket connections use JWTs to authenticate users and define permissions.
+
+#### Payload Structure
+
+<ParamField name="user_uuid" type="string" required>
+  UUID of the user connecting to the WebSocket
+</ParamField>
+
+<ParamField name="server_uuid" type="string" required>
+  UUID of the server being accessed
+</ParamField>
+
+<ParamField name="permissions" type="array" required>
+  List of permission strings (e.g., `["control.console", "control.start"]`)
+  
+  Use `["*"]` for full access (excludes admin permissions)
+</ParamField>
+
+<ParamField name="jti" type="string" required>
+  JWT ID for token revocation (typically MD5 of user_uuid + server_uuid)
+</ParamField>
+
+<ParamField name="iat" type="timestamp" required>
+  Issued-at timestamp (UNIX timestamp)
+</ParamField>
+
+<ParamField name="exp" type="timestamp" required>
+  Expiration timestamp (UNIX timestamp)
+</ParamField>
+
+#### Example WebSocket JWT Payload
+
+```json
+{
+  "user_uuid": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "server_uuid": "1a2b3c4d-5e6f-7890-1234-567890abcdef",
+  "permissions": [
+    "control.console",
+    "control.start",
+    "control.stop",
+    "control.restart",
+    "websocket.install",
+    "websocket.transfer"
+  ],
+  "jti": "d41d8cd98f00b204e9800998ecf8427e",
+  "iat": 1678901234,
+  "exp": 1678904834
+}
+```
+
+#### Connecting to WebSocket
+
+The WebSocket endpoint is publicly accessible but requires JWT authentication after connection:
+
+```
+GET /api/servers/:server/ws
+```
+
+**Connection Flow:**
+
+1. Client connects to WebSocket endpoint (no Bearer token required)
+2. Wings upgrades the connection
+3. Client sends `auth` event with JWT
+4. Wings validates JWT and permissions
+5. Connection is authenticated
+
+**Example Connection:**
+
+```javascript
+const ws = new WebSocket('wss://wings.example.com/api/servers/1a2b3c4d/ws');
+
+ws.onopen = () => {
+  ws.send(JSON.stringify({
+    event: 'auth',
+    args: ['<jwt-token>']
+  }));
+};
+```
+
+#### Token Denylist
+
+Wings maintains a denylist of revoked JWTs to prevent unauthorized access:
+
+<ParamField name="Wings Boot Time" type="timestamp">
+  All JWTs issued before Wings started are automatically invalid
+</ParamField>
+
+<ParamField name="User Denylist" type="map">
+  Tracks denied users per server (key: `server_uuid:user_uuid`, value: denial time)
+  
+  Any JWT issued before the denial time is rejected
+</ParamField>
+
+**Implementation Reference** (router/tokens/websocket.go:80-111):
+
+```go
+func (p *WebsocketPayload) Denylisted() bool {
+    if p.IssuedAt == nil {
+        return true
+    }
+    
+    // Reject tokens issued before Wings booted
+    if p.IssuedAt.Time.Before(wingsBootTime) {
+        return true
+    }
+    
+    // Check user-specific denylist
+    if t, ok := userDenylist.Load(strings.Join([]string{p.ServerUUID, p.UserUUID}, ":")); ok {
+        if p.IssuedAt.Time.Before(t.(time.Time)) {
+            return true
+        }
+    }
+    
+    return false
+}
+```
+
+#### Revoking WebSocket Access
+
+The Panel can revoke WebSocket access using:
+
+```bash
+POST /api/deauthorize-user
+
+{
+  "user": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "servers": [
+    "1a2b3c4d-5e6f-7890-1234-567890abcdef",
+    "2b3c4d5e-6f78-9012-3456-7890abcdef12"
+  ]
+}
+```
+
+Omit the `servers` array to revoke access across all servers.
+
+### File Download JWT
+
+File downloads use signed URLs with embedded JWTs.
+
+#### Endpoint
+
+```
+GET /download/file?token=<jwt>
+```
+
+#### Payload Structure
+
+<ParamField name="file_path" type="string" required>
+  Path to the file within the server directory
+</ParamField>
+
+<ParamField name="server_uuid" type="string" required>
+  UUID of the server containing the file
+</ParamField>
+
+<ParamField name="unique_id" type="string" required>
+  One-time use identifier to prevent token replay
+</ParamField>
+
+<ParamField name="exp" type="timestamp" required>
+  Token expiration time
+</ParamField>
+
+#### Example File Download JWT
+
+```json
+{
+  "file_path": "logs/latest.log",
+  "server_uuid": "1a2b3c4d-5e6f-7890-1234-567890abcdef",
+  "unique_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "exp": 1678901534
+}
+```
+
+#### One-Time Use Enforcement
+
+The `unique_id` field ensures each token can only be used once:
+
+**Implementation Reference** (router/tokens/file.go:23-25):
+
+```go
+func (p *FilePayload) IsUniqueRequest() bool {
+    return getTokenStore().IsValidToken(p.UniqueId)
+}
+```
+
+After a token is used, its `unique_id` is marked as consumed, preventing replay attacks.
+
+### Backup Download JWT
+
+Backup downloads follow the same pattern as file downloads.
+
+#### Endpoint
+
+```
+GET /download/backup?token=<jwt>
+```
+
+#### Payload Structure
+
+<ParamField name="server_uuid" type="string" required>
+  UUID of the server
+</ParamField>
+
+<ParamField name="backup_uuid" type="string" required>
+  UUID of the backup to download
+</ParamField>
+
+<ParamField name="unique_id" type="string" required>
+  One-time use identifier
+</ParamField>
+
+<ParamField name="exp" type="timestamp" required>
+  Token expiration time
+</ParamField>
+
+#### Example Backup JWT
+
+```json
+{
+  "server_uuid": "1a2b3c4d-5e6f-7890-1234-567890abcdef",
+  "backup_uuid": "9f8e7d6c-5b4a-3210-fedc-ba9876543210",
+  "unique_id": "a1b2c3d4-e5f6-7890-1234-567890abcdef",
+  "exp": 1678901534
+}
+```
+
+### File Upload JWT
+
+File uploads use JWTs in query parameters with multipart form data.
+
+#### Endpoint
+
+```
+POST /upload/file?token=<jwt>&directory=<path>
+```
+
+#### Payload Structure
+
+<ParamField name="server_uuid" type="string" required>
+  UUID of the server
+</ParamField>
+
+<ParamField name="user_uuid" type="string" required>
+  UUID of the user uploading files
+</ParamField>
+
+<ParamField name="unique_id" type="string" required>
+  One-time use identifier
+</ParamField>
+
+<ParamField name="exp" type="timestamp" required>
+  Token expiration time
+</ParamField>
+
+#### Upload Request Example
+
+```bash
+curl -X POST "https://wings.example.com/upload/file?token=<jwt>&directory=/logs" \
+  -F "files=@/path/to/file1.txt" \
+  -F "files=@/path/to/file2.log"
+```
+
+**File Validation:**
+- Maximum file size enforced (default: 100 MB)
+- Files checked against egg denylist
+- Total upload size validated
+- Permissions set to `0644`
+
+### Transfer JWT
+
+Server transfers between Wings instances use JWTs for authentication.
+
+#### Endpoint
+
+```
+POST /api/transfers
+```
+
+#### Payload Structure
+
+<ParamField name="server_uuid" type="string" required>
+  UUID of the server being transferred
+</ParamField>
+
+<ParamField name="exp" type="timestamp" required>
+  Token expiration time
+</ParamField>
+
+The receiving Wings instance validates the JWT was issued by the Panel before accepting the transfer.
+
+## Security Best Practices
+
+<Warning>
+**Never expose your Wings Bearer token**. It grants full administrative access to all servers on the node.
+</Warning>
+
+### Token Storage
+
+- Store the Bearer token securely in `/etc/pterodactyl/config.yml`
+- Restrict file permissions: `chmod 600 /etc/pterodactyl/config.yml`
+- Never commit tokens to version control
+- Rotate tokens if compromised
+
+### JWT Security
+
+- Set short expiration times (typically 15-60 minutes)
+- Use one-time tokens for sensitive operations (downloads, uploads)
+- Implement proper token revocation via the denylist
+- Validate all JWT claims, especially `exp` and `iat`
+
+### Network Security
+
+- Always use HTTPS/TLS in production
+- Configure `trusted_proxies` correctly if behind a reverse proxy
+- Restrict Wings API access to Panel backend only (firewall rules)
+- Use VPN or private networks when possible
+
+### Constant-Time Comparison
+
+Wings uses `crypto/subtle.ConstantTimeCompare` for token validation to prevent timing attacks:
+
+```go
+if subtle.ConstantTimeCompare([]byte(auth[1]), []byte(config.Get().Token.Token)) != 1 {
+    // Token invalid
+}
+```
+
+This ensures token comparison takes the same amount of time regardless of where the mismatch occurs, preventing attackers from deducing token characters through timing analysis.
+
+## Example: Complete API Request
+
+### System Information Request
+
+```bash
+curl -X GET https://wings.example.com/api/system \
+  -H "Authorization: Bearer ptla_1234567890abcdefghijklmnopqrstuvwxyz" \
+  -H "Accept: application/json"
+```
+
+**Response:**
+
+```json
+{
+  "architecture": "amd64",
+  "cpu_count": 8,
+  "kernel_version": "5.15.0-56-generic",
+  "os": "linux",
+  "version": "1.11.5"
+}
+```
+
+**Response Headers:**
+
+```
+HTTP/2 200
+Content-Type: application/json; charset=utf-8
+X-Request-Id: 550e8400-e29b-41d4-a716-446655440000
+Access-Control-Allow-Origin: https://panel.example.com
+Access-Control-Allow-Credentials: true
+```
+
+### Server Power Action
+
+```bash
+curl -X POST https://wings.example.com/api/servers/1a2b3c4d/power \
+  -H "Authorization: Bearer ptla_1234567890abcdefghijklmnopqrstuvwxyz" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "action": "start",
+    "wait_seconds": 30
+  }'
+```
+
+**Response:**
+
+```
+HTTP/2 202 Accepted
+X-Request-Id: 550e8400-e29b-41d4-a716-446655440001
+```
+
+The action is processed asynchronously. Status updates are sent via WebSocket events.
