@@ -1,0 +1,193 @@
+{
+  "projectType": "infrastructure",
+  "projectName": "Pterodactyl Wings",
+  "projectDescription": "High-performance server control plane for Pterodactyl Panel with Docker integration and built-in SFTP server.",
+  "theme": "aspen",
+  "primaryColor": "#9a5c2b",
+  "lightColor": "#b8aca4",
+  "darkColor": "#f4f1ea",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "introduction",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Installation",
+            "pages": [
+              "installation/requirements",
+              "installation/installing",
+              "installation/configuration",
+              "installation/panel-configuration"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/server-lifecycle",
+              "concepts/docker-integration",
+              "concepts/file-management"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/config-file",
+              "configuration/system-settings",
+              "configuration/docker-settings",
+              "configuration/sftp-settings",
+              "configuration/ssl-tls"
+            ]
+          },
+          {
+            "group": "Operations",
+            "pages": [
+              "operations/server-management",
+              "operations/backups",
+              "operations/transfers",
+              "operations/diagnostics",
+              "operations/monitoring"
+            ]
+          },
+          {
+            "group": "Security",
+            "pages": [
+              "security/authentication",
+              "security/ssl-certificates",
+              "security/permissions",
+              "security/best-practices"
+            ]
+          },
+          {
+            "group": "Troubleshooting",
+            "pages": [
+              "troubleshooting/common-issues",
+              "troubleshooting/debugging",
+              "troubleshooting/performance"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "api/overview",
+              "api/authentication"
+            ]
+          },
+          {
+            "group": "System",
+            "pages": [
+              "api/system/information",
+              "api/system/configuration"
+            ]
+          },
+          {
+            "group": "Servers",
+            "pages": [
+              "api/servers/list",
+              "api/servers/create",
+              "api/servers/details",
+              "api/servers/delete",
+              "api/servers/power",
+              "api/servers/commands",
+              "api/servers/install",
+              "api/servers/sync",
+              "api/servers/logs",
+              "api/servers/websocket"
+            ]
+          },
+          {
+            "group": "File Management",
+            "pages": [
+              "api/files/list-directory",
+              "api/files/read",
+              "api/files/write",
+              "api/files/upload",
+              "api/files/download",
+              "api/files/rename",
+              "api/files/copy",
+              "api/files/delete",
+              "api/files/compress",
+              "api/files/decompress",
+              "api/files/chmod",
+              "api/files/pull-remote"
+            ]
+          },
+          {
+            "group": "Backups",
+            "pages": [
+              "api/backups/create",
+              "api/backups/restore",
+              "api/backups/delete",
+              "api/backups/download"
+            ]
+          },
+          {
+            "group": "Transfers",
+            "pages": [
+              "api/transfers/initiate",
+              "api/transfers/status",
+              "api/transfers/cancel"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Docker-based server isolation and resource management",
+    "Built-in SFTP server with Panel authentication",
+    "RESTful HTTP API for server lifecycle management",
+    "Real-time WebSocket console streaming",
+    "Automated backup creation and restoration",
+    "Server transfer capabilities between nodes",
+    "Comprehensive file management operations",
+    "Power action control (start, stop, restart, kill)",
+    "Resource monitoring and statistics",
+    "TLS/SSL support with Let's Encrypt integration",
+    "Configuration file parsing and validation",
+    "Crash detection and automatic recovery"
+  ],
+  "publicApiSurface": [
+    "GET /api/system - System information",
+    "GET /api/servers - List all servers",
+    "POST /api/servers - Create server",
+    "GET /api/servers/:server - Server details",
+    "DELETE /api/servers/:server - Delete server",
+    "POST /api/servers/:server/power - Power actions",
+    "POST /api/servers/:server/commands - Send commands",
+    "GET /api/servers/:server/logs - Get server logs",
+    "GET /api/servers/:server/ws - WebSocket connection",
+    "GET /api/servers/:server/files/list-directory - List files",
+    "GET /api/servers/:server/files/contents - Read file",
+    "POST /api/servers/:server/files/write - Write file",
+    "POST /api/servers/:server/files/delete - Delete files",
+    "POST /api/servers/:server/files/compress - Compress files",
+    "POST /api/servers/:server/files/decompress - Decompress archive",
+    "POST /api/servers/:server/files/chmod - Change permissions",
+    "POST /api/servers/:server/files/pull - Remote file download",
+    "POST /api/servers/:server/backup - Create backup",
+    "POST /api/servers/:server/backup/:backup/restore - Restore backup",
+    "DELETE /api/servers/:server/backup/:backup - Delete backup",
+    "POST /api/servers/:server/transfer - Initiate transfer",
+    "DELETE /api/servers/:server/transfer - Cancel transfer",
+    "POST /api/transfers - Accept incoming transfer",
+    "GET /download/backup - Download backup (signed URL)",
+    "GET /download/file - Download file (signed URL)",
+    "POST /upload/file - Upload file (signed URL)",
+    "SFTP Server - Port 2022 (default)",
+    "wings configure - Interactive configuration",
+    "wings diagnostics - System diagnostics"
+  ]
+}
